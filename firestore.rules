@@ -1,0 +1,81 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Role Assignments (Admin defined role mapping)
+    match /role_assignments/{assignmentId} {
+      allow read, write: if true;
+    }
+
+    // Announcements Collection
+    match /announcements/{announcementId} {
+      allow read, write: if true;
+    }
+
+    // Homeworks Collection
+    match /homeworks/{homeworkId} {
+      allow read, write: if true;
+    }
+
+    // Homework Submissions Collection
+    match /homework_submissions/{submissionId} {
+      allow read, write: if true;
+    }
+
+    // Grades Collection
+    match /grades/{gradeId} {
+      allow read, write: if true;
+    }
+
+    // Attendance Collection
+    match /attendance/{attendanceId} {
+      allow read, write: if true;
+    }
+
+    // Badges & Student Badges
+    match /badges/{badgeId} {
+      allow read, write: if true;
+    }
+
+    match /student_badges/{studentBadgeId} {
+      allow read, write: if true;
+    }
+
+    // Real-time Chat Conversations and Messages
+    match /conversations/{conversationId} {
+      allow read, write: if true;
+    }
+
+    match /chat_messages/{messageId} {
+      allow read, write: if true;
+    }
+
+    // Notifications Collection
+    match /notifications/{notificationId} {
+      allow read, write: if true;
+    }
+
+    // School Classes & System Logs
+    match /classes/{classId} {
+      allow read, write: if true;
+    }
+
+    match /system_logs/{logId} {
+      allow read, write: if true;
+    }
+
+    // Default Fallback
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

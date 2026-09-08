@@ -1,0 +1,185 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Kullanıcı profili ve rol bilgileri",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "teacher", "student"] },
+        "schoolNumber": { "type": "string" },
+        "classGrade": { "type": "string" },
+        "branch": { "type": "string" },
+        "phone": { "type": "string" },
+        "password": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "deactivated"] },
+        "totalXp": { "type": "number" },
+        "level": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "displayName", "role"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Okul ve sınıf duyuruları",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "authorName": { "type": "string" },
+        "priority": { "type": "string", "enum": ["normal", "important", "urgent"] },
+        "targetAudience": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "content", "authorName", "priority", "createdAt"]
+    },
+    "Homework": {
+      "title": "Homework",
+      "description": "Öğretmenler tarafından verilen ödevler",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "subject": { "type": "string" },
+        "description": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "targetClass": { "type": "string" },
+        "dueDate": { "type": "string" },
+        "dueTime": { "type": "string" },
+        "maxScore": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "subject", "targetClass", "dueDate"]
+    },
+    "HomeworkSubmission": {
+      "title": "HomeworkSubmission",
+      "description": "Öğrenci ödev teslim ve değerlendirme kayıtları",
+      "type": "object",
+      "properties": {
+        "homeworkId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "status": { "type": "string", "enum": ["completed", "not_completed", "excused", "pending"] },
+        "score": { "type": "number" },
+        "teacherFeedback": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["homeworkId", "studentId", "status"]
+    },
+    "GradeRecord": {
+      "title": "GradeRecord",
+      "description": "Sınav ve deneme notları",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "studentNumber": { "type": "string" },
+        "studentClass": { "type": "string" },
+        "subject": { "type": "string" },
+        "examType": { "type": "string" },
+        "score": { "type": "number" },
+        "examDate": { "type": "string" }
+      },
+      "required": ["studentId", "subject", "examType", "score"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Günlük ve tarih bazlı öğrenci devamsızlık kayıtları",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "studentNumber": { "type": "string" },
+        "studentClass": { "type": "string" },
+        "status": { "type": "string", "enum": ["present", "absent", "excused", "late"] }
+      },
+      "required": ["date", "studentId", "status"]
+    },
+    "Badge": {
+      "title": "Badge",
+      "description": "Sanal başarı rozetleri ve puan tanımları",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "icon": { "type": "string" },
+        "points": { "type": "number" },
+        "category": { "type": "string" },
+        "rarity": { "type": "string" }
+      },
+      "required": ["name", "points", "category"]
+    },
+    "StudentBadge": {
+      "title": "StudentBadge",
+      "description": "Öğrencilere verilen rozet kayıtları",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "badgeId": { "type": "string" },
+        "awardedAt": { "type": "string" },
+        "awardedBy": { "type": "string" }
+      },
+      "required": ["studentId", "badgeId", "awardedAt"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Birebir veya grup sohbet odaları",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["direct", "group"] },
+        "name": { "type": "string" },
+        "participants": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["type", "updatedAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Sohbet mesajları",
+      "type": "object",
+      "properties": {
+        "conversationId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["conversationId", "senderId", "text", "createdAt"]
+    },
+    "RoleAssignment": {
+      "title": "RoleAssignment",
+      "description": "Yönetici tarafından tanımlanan kullanıcı rol ve yetki atamaları",
+      "type": "object",
+      "properties": {
+        "userEmail": { "type": "string" },
+        "userName": { "type": "string" },
+        "assignedRole": { "type": "string", "enum": ["admin", "teacher", "student"] },
+        "classGrade": { "type": "string" },
+        "branch": { "type": "string" },
+        "schoolNumber": { "type": "string" },
+        "assignedBy": { "type": "string" },
+        "assignedAt": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "pending", "revoked"] },
+        "notes": { "type": "string" }
+      },
+      "required": ["userEmail", "userName", "assignedRole", "assignedBy", "assignedAt"]
+    }
+  },
+  "firestore": {
+    "users": { "schema": "UserProfile", "description": "Kullanıcılar" },
+    "role_assignments": { "schema": "RoleAssignment", "description": "Yönetici rol atama kayıtları" },
+    "announcements": { "schema": "Announcement", "description": "Duyurular" },
+    "homeworks": { "schema": "Homework", "description": "Ödevler" },
+    "homework_submissions": { "schema": "HomeworkSubmission", "description": "Ödev teslim ve takip durumları" },
+    "grades": { "schema": "GradeRecord", "description": "Sınav ve deneme notları" },
+    "attendance": { "schema": "AttendanceRecord", "description": "Devamsızlık kayıtları" },
+    "badges": { "schema": "Badge", "description": "Rozet tanımları" },
+    "student_badges": { "schema": "StudentBadge", "description": "Öğrenci rozetleri" },
+    "conversations": { "schema": "Conversation", "description": "Sohbet konuşmaları" },
+    "chat_messages": { "schema": "ChatMessage", "description": "Sohbet mesajları" },
+    "notifications": { "description": "Bildirimler" },
+    "classes": { "description": "Sınıflar" },
+    "system_logs": { "description": "Sistem denetim logları" }
+  }
+}
