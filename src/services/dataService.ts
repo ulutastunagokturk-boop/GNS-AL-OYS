@@ -112,7 +112,7 @@ export function sanitizeForFirestore<T>(data: T): T {
   return data;
 }
 
-const CACHE_STORAGE_KEY = 'gnisal_oys_manual_classes_v11';
+const CACHE_STORAGE_KEY = 'gnisal_oys_v13_clean_slate';
 
 export interface LocalCacheStore {
   users: UserProfile[];
@@ -151,34 +151,21 @@ class DataService {
       const saved = localStorage.getItem(CACHE_STORAGE_KEY);
       if (saved) {
         const parsed: LocalCacheStore = JSON.parse(saved);
-        // Purge any test or legacy mock accounts
+        // Only keep admin accounts, purge ulutastunagokturk@gmail.com and all non-admin accounts
         parsed.users = (parsed.users || []).filter(u => {
           const uid = (u.uid || '').toLowerCase();
-          const email = (u.email || '').toLowerCase();
-          const name = (u.displayName || '').toLowerCase();
+          const email = (u.email || '').toLowerCase().trim();
           if (
-            uid === 'test-user' || 
-            uid === 'sync-test-device-check' || 
-            uid === 'user-1788116379466-295' || 
-            uid === 'user-1788848295245-674' || 
-            uid.includes('sync-test') || 
-            email.includes('test-device') || 
-            email === '123@123' || 
-            email === '123@gnsial.k12.tr' || 
-            name === 'test' || 
-            name === '123' || 
-            name === 'cihaz eşitleme testi'
+            email === 'ulutastunagokturk@gmail.com' ||
+            uid === 'admin-owner-ulutas' ||
+            u.role !== 'admin'
           ) {
             return false;
           }
-          return (
-            u.email !== 'yonetim@okul.k12.tr' && 
-            u.email !== 'canan.ozkan@okul.k12.tr' &&
-            u.email !== 'ahmet.yilmaz@okul.k12.tr'
-          );
+          return true;
         });
 
-        // Purge any mock generated schedule slots from cache
+        // Purge mock generated schedule slots from cache
         parsed.schedules = (parsed.schedules || []).filter(s => 
           !s.id.startsWith('slot-10A-') &&
           !s.id.startsWith('slot-9A-') &&
@@ -191,35 +178,16 @@ class DataService {
         if (!parsed.users.some(u => u.email?.toLowerCase() === INITIAL_ADMIN.email.toLowerCase())) {
           parsed.users.unshift(INITIAL_ADMIN);
         }
-        if (!parsed.users.some(u => u.email?.toLowerCase() === 'ulutastunagokturk@gmail.com')) {
-          parsed.users.push({
-            uid: 'admin-owner-ulutas',
-            email: 'ulutastunagokturk@gmail.com',
-            displayName: 'Tuna Göktürk Ulutaş (Yönetici)',
-            role: 'admin',
-            phone: '0555 000 0001',
-            status: 'active',
-            isOnline: true,
-            createdAt: new Date().toISOString()
-          });
-        }
-        // Ensure all students have a unique password defined
-        let cacheUpdated = false;
-        parsed.users = parsed.users.map(u => {
-          if (u.role === 'student' && !u.password) {
-            cacheUpdated = true;
-            return {
-              ...u,
-              password: generateUniqueStudentPassword({ schoolNumber: u.schoolNumber })
-            };
-          }
-          return u;
+
+        parsed.roleAssignments = (parsed.roleAssignments || []).filter(ra => {
+          const em = (ra.userEmail || '').toLowerCase().trim();
+          return em !== 'ulutastunagokturk@gmail.com' && ra.id !== 'assign-admin-owner' && ra.assignedRole === 'admin';
         });
-        if (cacheUpdated) {
-          try {
-            localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(parsed));
-          } catch {}
-        }
+
+        try {
+          localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(parsed));
+        } catch {}
+
         if (!parsed.schedules) {
           parsed.schedules = [];
         }
@@ -232,18 +200,8 @@ class DataService {
       console.warn('Could not read from localStorage', e);
     }
 
-    // Pure Clean Initial State with both Root Admins
-    const ownerAdmin: UserProfile = {
-      uid: 'admin-owner-ulutas',
-      email: 'ulutastunagokturk@gmail.com',
-      displayName: 'Tuna Göktürk Ulutaş (Yönetici)',
-      role: 'admin',
-      phone: '0555 000 0001',
-      status: 'active',
-      isOnline: true,
-      createdAt: new Date().toISOString()
-    };
-    const allUsers = [INITIAL_ADMIN, ownerAdmin];
+    // Pure Clean Initial State with ONLY INITIAL_ADMIN
+    const allUsers = [INITIAL_ADMIN];
     
     const initialRoleAssignments: RoleAssignment[] = [
       {
@@ -255,23 +213,6 @@ class DataService {
         assignedAt: new Date().toISOString(),
         status: 'active',
         notes: 'Ana Yönetici (Root Admin) tam yetkili sistem yöneticisi',
-        permissions: [
-          'Tam Sistem ve Veritabanı Erişimi',
-          'Yeni Yönetici (Admin) ve Öğretmen Atama',
-          'Tüm Not, Sınav ve Devamsızlık Yönetimi',
-          'Öğrenci ve Sınıf Kayıt İşlemleri',
-          'Firestore Güvenlik & Sistem Logları'
-        ]
-      },
-      {
-        id: 'assign-admin-owner',
-        userEmail: ownerAdmin.email,
-        userName: ownerAdmin.displayName,
-        assignedRole: 'admin',
-        assignedBy: 'Sistem Kurucusu / Kök Yetkili',
-        assignedAt: new Date().toISOString(),
-        status: 'active',
-        notes: 'Okul Müdürü & Sistem Yöneticisi',
         permissions: [
           'Tam Sistem ve Veritabanı Erişimi',
           'Yeni Yönetici (Admin) ve Öğretmen Atama',
@@ -388,10 +329,14 @@ class DataService {
           const userMap = new Map<string, UserProfile>();
           // Preserve local root admin
           userMap.set(INITIAL_ADMIN.uid, INITIAL_ADMIN);
-          // Put existing cache users
-          this.cache.users.forEach(u => userMap.set(u.uid, u));
-          // Overwrite with live database users
-          state.users.forEach(u => userMap.set(u.uid, u));
+          // Put existing cache users (admins only)
+          this.cache.users
+            .filter(u => u.role === 'admin' && (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' && u.uid !== 'admin-owner-ulutas')
+            .forEach(u => userMap.set(u.uid, u));
+          // Only keep admins from database
+          state.users
+            .filter((u: UserProfile) => u.role === 'admin' && (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' && u.uid !== 'admin-owner-ulutas')
+            .forEach((u: UserProfile) => userMap.set(u.uid, u));
           this.cache.users = Array.from(userMap.values());
           changed = true;
         }
@@ -450,7 +395,11 @@ class DataService {
         }
 
         if (Array.isArray(state.roleAssignments) && state.roleAssignments.length > 0) {
-          this.cache.roleAssignments = state.roleAssignments;
+          this.cache.roleAssignments = state.roleAssignments.filter(ra => 
+            ra.assignedRole === 'admin' && 
+            (ra.userEmail || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' &&
+            ra.id !== 'assign-admin-owner'
+          );
           changed = true;
         }
 
@@ -603,7 +552,7 @@ class DataService {
   }
 
   /**
-   * Ensures INITIAL_ADMIN and owner admin exist in Firestore.
+   * Ensures INITIAL_ADMIN exists in Firestore and removes any rogue non-admin or ulutas accounts.
    */
   private async seedInitialAdminIfMissing() {
     try {
@@ -614,43 +563,25 @@ class DataService {
         console.log('[Firestore] Seeded INITIAL_ADMIN to Firestore');
       }
 
-      const ownerAdmin: UserProfile = {
-        uid: 'admin-owner-ulutas',
-        email: 'ulutastunagokturk@gmail.com',
-        displayName: 'Tuna Göktürk Ulutaş (Yönetici)',
-        role: 'admin',
-        phone: '0555 000 0001',
-        status: 'active',
-        isOnline: true,
-        createdAt: new Date().toISOString()
-      };
-      const ownerDocRef = doc(db, 'users', ownerAdmin.uid);
-      const ownerSnap = await getDoc(ownerDocRef);
-      if (!ownerSnap.exists()) {
-        await setDoc(ownerDocRef, sanitizeForFirestore(ownerAdmin));
-      }
-
-      // Also ensure any non-test users currently in local cache are synced to Firestore if missing
-      for (const u of this.cache.users) {
-        if (
-          u.uid === 'test-user' || 
-          u.uid === 'sync-test-device-check' || 
-          u.uid === 'user-1788116379466-295' || 
-          u.uid === 'user-1788848295245-674' || 
-          u.displayName === 'test' || 
-          u.displayName === '123' ||
-          u.email?.includes('test-device')
-        ) {
-          continue;
+      // Proactively purge ulutastunagokturk@gmail.com from Firestore if exists
+      try {
+        const ownerDocRef = doc(db, 'users', 'admin-owner-ulutas');
+        const ownerSnap = await getDoc(ownerDocRef);
+        if (ownerSnap.exists()) {
+          await deleteDoc(ownerDocRef);
         }
-        try {
-          const userDocRef = doc(db, 'users', u.uid);
-          const uSnap = await getDoc(userDocRef);
-          if (!uSnap.exists()) {
-            await setDoc(userDocRef, sanitizeForFirestore(u));
-          }
-        } catch {}
+      } catch {}
+
+      // Keep only admin users in cache
+      this.cache.users = this.cache.users.filter(u => 
+        u.role === 'admin' && 
+        (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' &&
+        u.uid !== 'admin-owner-ulutas'
+      );
+      if (!this.cache.users.some(u => u.uid === INITIAL_ADMIN.uid)) {
+        this.cache.users.unshift(INITIAL_ADMIN);
       }
+      this.saveCache(this.cache);
     } catch (err) {
       console.log('[Firestore] seedInitialAdmin note:', err);
     }
@@ -685,15 +616,27 @@ class DataService {
     try {
       const snap = await getDocs(collection(db, 'users'));
       if (!snap.empty) {
-        const remoteUsers: UserProfile[] = [];
-        snap.forEach(docSnap => {
-          remoteUsers.push({ ...(docSnap.data() as UserProfile), uid: docSnap.id });
-        });
+        const remoteAdmins: UserProfile[] = [];
+        for (const docSnap of snap.docs) {
+          const u = { ...(docSnap.data() as UserProfile), uid: docSnap.id };
+          const em = (u.email || '').toLowerCase().trim();
+          const isUlutas = em === 'ulutastunagokturk@gmail.com' || docSnap.id === 'admin-owner-ulutas';
+          const isNonAdmin = u.role !== 'admin';
+
+          if (isUlutas || isNonAdmin) {
+            // Delete rogue non-admin or ulutas user from Firestore
+            deleteDoc(doc(db, 'users', docSnap.id)).catch(() => {});
+          } else {
+            remoteAdmins.push(u);
+          }
+        }
 
         const mergedMap = new Map<string, UserProfile>();
         mergedMap.set(INITIAL_ADMIN.uid, INITIAL_ADMIN);
-        this.cache.users.forEach(u => mergedMap.set(u.uid, u));
-        remoteUsers.forEach(u => mergedMap.set(u.uid, u));
+        this.cache.users
+          .filter(u => u.role === 'admin' && (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' && u.uid !== 'admin-owner-ulutas')
+          .forEach(u => mergedMap.set(u.uid, u));
+        remoteAdmins.forEach(u => mergedMap.set(u.uid, u));
 
         this.cache.users = Array.from(mergedMap.values());
         this.saveCache(this.cache);

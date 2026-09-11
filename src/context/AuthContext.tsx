@@ -36,7 +36,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const AUTH_STORAGE_KEY = 'okul_portal_current_user_v4';
+const AUTH_STORAGE_KEY = 'okul_portal_current_user_v5';
 const THEME_STORAGE_KEY = 'okul_portal_theme';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -70,9 +70,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.removeItem('okul_portal_current_user');
       localStorage.removeItem('okul_portal_current_user_v2');
       localStorage.removeItem('okul_portal_current_user_v3');
+      localStorage.removeItem('okul_portal_current_user_v4');
       sessionStorage.removeItem('okul_portal_current_user');
       sessionStorage.removeItem('okul_portal_current_user_v2');
       sessionStorage.removeItem('okul_portal_current_user_v3');
+      sessionStorage.removeItem('okul_portal_current_user_v4');
 
       let savedUser = localStorage.getItem(AUTH_STORAGE_KEY);
       if (!savedUser) {
@@ -81,13 +83,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (savedUser) {
         const parsed = JSON.parse(savedUser);
-        const live = dataService.getUserById(parsed.uid) || dataService.getUsers().find(u => u.email?.toLowerCase() === parsed.email?.toLowerCase());
-        if (live) {
+        const parsedEmail = (parsed.email || '').toLowerCase().trim();
+        if (parsedEmail === 'ulutastunagokturk@gmail.com' || parsed.uid === 'admin-owner-ulutas' || parsed.role !== 'admin') {
+          // Explicitly wiped
+          localStorage.removeItem(AUTH_STORAGE_KEY);
+          sessionStorage.removeItem(AUTH_STORAGE_KEY);
+          setCurrentUser(null);
+          return;
+        }
+
+        const live = dataService.getUserById(parsed.uid) || dataService.getUsers().find(u => u.email?.toLowerCase() === parsedEmail);
+        if (live && live.role === 'admin') {
           setCurrentUser(live);
         } else {
           // Check Firestore before discarding session
           dataService.findAndSyncUserFromFirestore({ email: parsed.email, schoolNumber: parsed.schoolNumber }).then(found => {
-            if (found) {
+            if (found && found.role === 'admin' && (found.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com') {
               setCurrentUser(found);
             } else {
               localStorage.removeItem(AUTH_STORAGE_KEY);
@@ -95,7 +106,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               setCurrentUser(null);
             }
           }).catch(() => {
-            setCurrentUser(parsed);
+            setCurrentUser(null);
           });
         }
       } else {
