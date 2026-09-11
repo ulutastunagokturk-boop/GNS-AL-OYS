@@ -133,14 +133,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const parents = users.filter(u => u.role === 'parent');
 
   const rolePermissionTemplates: Record<string, string[]> = {
-    student: ['Ders Takibi', 'Ödev Teslimi', 'Rozet & Puan Kazanımı', 'Duyuru Görüntüleme', 'Öğretmenle İletişim'],
-    teacher: ['Ödev Oluşturma & Puanlama', 'Sınav Notu Girişi', 'Yoklama Alma', 'Duyuru Yayınlama', 'Sınıf Takibi', 'Birebir Mesajlaşma'],
+    student: ['Ders Takibi', 'Ödev Teslimi', 'Rozet & Puan Kazanımı', 'Duyuru Görüntüleme', 'Ders Programı Takibi'],
+    teacher: ['Ödev Oluşturma & Puanlama', 'Sınav Notu Girişi', 'Yoklama Alma', 'Duyuru Yayınlama', 'Sınıf Takibi'],
     parent: [
       'Öğrenci Not ve Karne Takibi',
       'Günlük Devamsızlık ve İzin Bilgisi',
       'Ödev, Proje ve Teslim Durumu',
       'Okul & Sınıf Duyuruları',
-      'Öğretmenle Doğrudan İletişim / Mesajlaşma'
+      'Öğretmen & Rehberlik İletişim Bilgileri'
     ],
     admin: [
       'Tam Sistem ve Firestore Veritabanı Erişimi',

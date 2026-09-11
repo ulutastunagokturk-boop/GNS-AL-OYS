@@ -159,7 +159,7 @@
       "properties": {
         "userEmail": { "type": "string" },
         "userName": { "type": "string" },
-        "assignedRole": { "type": "string", "enum": ["admin", "teacher", "student"] },
+        "assignedRole": { "type": "string", "enum": ["admin", "teacher", "student", "parent"] },
         "classGrade": { "type": "string" },
         "branch": { "type": "string" },
         "schoolNumber": { "type": "string" },
@@ -181,8 +181,6 @@
     "attendance": { "schema": "AttendanceRecord", "description": "Devamsızlık kayıtları" },
     "badges": { "schema": "Badge", "description": "Rozet tanımları" },
     "student_badges": { "schema": "StudentBadge", "description": "Öğrenci rozetleri" },
-    "conversations": { "schema": "Conversation", "description": "Sohbet konuşmaları" },
-    "chat_messages": { "schema": "ChatMessage", "description": "Sohbet mesajları" },
     "notifications": { "description": "Bildirimler" },
     "classes": { "description": "Sınıflar" },
     "system_logs": { "description": "Sistem denetim logları" }

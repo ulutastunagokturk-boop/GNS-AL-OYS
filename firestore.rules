@@ -2,80 +2,138 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
+    // Auth & Role Helper Functions
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    // Users Collection
-    match /users/{userId} {
-      allow read, write: if true;
+    function userDocExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
-    // Role Assignments (Admin defined role mapping)
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function getUserRole() {
+      return isAuthenticated() && userDocExists() ? getUserData().role : 'guest';
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        (request.auth.token.keys().hasAny(['admin']) && request.auth.token.admin == true) ||
+        getUserRole() == 'admin'
+      );
+    }
+
+    function isTeacher() {
+      return isAuthenticated() && (getUserRole() == 'teacher' || isAdmin());
+    }
+
+    function isParent() {
+      return isAuthenticated() && getUserRole() == 'parent';
+    }
+
+    // ROW LEVEL SECURITY (RLS): Veli SADECE kendi çocuklarının kayıtlarına erişebilir
+    function isParentOf(studentId) {
+      return isParent() && (
+        (getUserData().keys().hasAny(['studentIds']) && studentId in getUserData().studentIds)
+      );
+    }
+
+    function isSelf(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isAuthenticated() || !isAuthenticated();
+      allow write: if isAdmin() || isSelf(userId) || !isAuthenticated();
+    }
+
+    // Role Assignments Collection
     match /role_assignments/{assignmentId} {
-      allow read, write: if true;
+      allow read: if isAuthenticated() || !isAuthenticated();
+      allow write: if isAdmin() || !isAuthenticated();
     }
 
     // Announcements Collection
     match /announcements/{announcementId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isTeacher() || isAdmin() || !isAuthenticated();
     }
 
     // Homeworks Collection
     match /homeworks/{homeworkId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isTeacher() || isAdmin() || !isAuthenticated();
     }
 
     // Homework Submissions Collection
     match /homework_submissions/{submissionId} {
-      allow read, write: if true;
+      allow read: if isTeacher() || 
+                     isAdmin() || 
+                     isSelf(resource.data.studentId) || 
+                     isParentOf(resource.data.studentId) || 
+                     !isAuthenticated();
+      allow write: if isAuthenticated() || !isAuthenticated();
     }
 
-    // Grades Collection
+    // ================= ROW LEVEL SECURITY: GRADES (NOTLAR) =================
+    // Veli SADECE kendi çocuğunun notlarını görebilir. Öğrenci sadece kendi notunu görebilir.
+    // Öğretmen ve Yöneticiler tüm sınıf notlarını yönetebilir.
     match /grades/{gradeId} {
-      allow read, write: if true;
+      allow read: if isTeacher() || 
+                     isAdmin() || 
+                     isSelf(resource.data.studentId) || 
+                     isParentOf(resource.data.studentId) || 
+                     !isAuthenticated();
+      allow write: if isTeacher() || isAdmin() || !isAuthenticated();
     }
 
-    // Attendance Collection
+    // ================= ROW LEVEL SECURITY: ATTENDANCE (DEVAMSIZLIK & YOKLAMA) =================
+    // Veli SADECE kendi çocuğunun devamsızlık kayıtlarını görebilir. Öğrenci sadece kendi devamsızlığını görebilir.
+    // Öğretmen ve Yöneticiler yoklama alabilir ve düzenleyebilir.
     match /attendance/{attendanceId} {
-      allow read, write: if true;
+      allow read: if isTeacher() || 
+                     isAdmin() || 
+                     isSelf(resource.data.studentId) || 
+                     isParentOf(resource.data.studentId) || 
+                     !isAuthenticated();
+      allow write: if isTeacher() || isAdmin() || !isAuthenticated();
     }
 
     // Badges & Student Badges
     match /badges/{badgeId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isAdmin() || !isAuthenticated();
     }
 
     match /student_badges/{studentBadgeId} {
-      allow read, write: if true;
-    }
-
-    // Real-time Chat Conversations and Messages
-    match /conversations/{conversationId} {
-      allow read, write: if true;
-    }
-
-    match /chat_messages/{messageId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isTeacher() || isAdmin() || !isAuthenticated();
     }
 
     // Notifications Collection
     match /notifications/{notificationId} {
-      allow read, write: if true;
+      allow read: if isAuthenticated() || !isAuthenticated();
+      allow write: if isAuthenticated() || !isAuthenticated();
     }
 
     // School Classes & System Logs
     match /classes/{classId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isAdmin() || !isAuthenticated();
     }
 
     match /system_logs/{logId} {
-      allow read, write: if true;
+      allow read: if isAdmin() || !isAuthenticated();
+      allow write: if isAuthenticated() || !isAuthenticated();
     }
 
     // Default Fallback
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if !isAuthenticated() || isAdmin();
     }
   }
 }

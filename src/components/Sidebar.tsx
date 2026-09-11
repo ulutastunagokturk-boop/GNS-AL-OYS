@@ -19,7 +19,6 @@ import {
   Layers,
   Calendar,
   Settings,
-  MessageSquare,
   Trophy,
   Cpu,
   Database
@@ -103,13 +102,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           badge: `${students.length}` 
         },
         { 
-          id: 'chat', 
-          label: 'Mesajlar & Sohbet', 
-          sublabel: 'Öğrenci & Zümre', 
-          icon: MessageSquare,
-          badge: 'Canlı'
-        },
-        { 
           id: 'achievements', 
           label: 'Başarı & Rozet Sistemi', 
           sublabel: 'Öğrenci Gamification', 
@@ -165,13 +157,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           sublabel: 'Güncel İlanlar', 
           icon: Megaphone, 
           badge: `${announcements.length}` 
-        },
-        { 
-          id: 'chat', 
-          label: 'Mesajlar & Sohbet', 
-          sublabel: 'Öğretmen & Gruplar', 
-          icon: MessageSquare,
-          badge: 'Canlı'
         },
         { 
           id: 'achievements', 
@@ -252,6 +237,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           badge: `${users.length}` 
         },
         { 
+          id: 'parents', 
+          label: 'Veli Yönetimi (Excel)', 
+          sublabel: `${users.filter(u => u.role === 'parent').length} Kayıtlı Veli`, 
+          icon: UserCheck, 
+          badge: `${users.filter(u => u.role === 'parent').length}`,
+          badgeColor: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+        },
+        { 
           id: 'classes', 
           label: 'Sınıf & Şube Yapısı', 
           sublabel: `${classes.length} Aktif Şube`, 
@@ -273,12 +266,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           icon: Cpu, 
           badge: 'Admin',
           badgeColor: 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300'
-        },
-        { 
-          id: 'chat', 
-          label: 'Okul Mesajlaşma', 
-          sublabel: 'İletişim Hattı', 
-          icon: MessageSquare 
         },
         { 
           id: 'achievements', 

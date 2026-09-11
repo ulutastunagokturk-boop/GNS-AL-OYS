@@ -388,56 +388,77 @@ export const SupabaseBackupManagerView: React.FC = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
           {[
             {
               name: 'profiles',
               label: 'Kullanıcılar',
-              desc: 'Öğrenci & Öğretmen',
+              desc: 'Tüm Hesaplar',
               count: status?.tableCounts?.profiles ?? 0,
               badgeColor: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+            },
+            {
+              name: 'parents',
+              label: 'Veliler',
+              desc: 'Veli Hesapları',
+              count: status?.tableCounts?.parents ?? 0,
+              badgeColor: 'bg-amber-500/10 text-amber-500 border-amber-500/20'
+            },
+            {
+              name: 'students',
+              label: 'Öğrenciler',
+              desc: 'Öğrenci Kayıtları',
+              count: status?.tableCounts?.students ?? 0,
+              badgeColor: 'bg-blue-500/10 text-blue-500 border-blue-500/20'
+            },
+            {
+              name: 'parent_student_relations',
+              label: 'Veli-Öğrenci Bağı',
+              desc: 'RLS Yetki İlişkisi',
+              count: status?.tableCounts?.parentRelations ?? 0,
+              badgeColor: 'bg-purple-500/10 text-purple-500 border-purple-500/20'
             },
             {
               name: 'classes',
               label: 'Sınıflar',
               desc: 'Şubeler & Düzeyler',
               count: status?.tableCounts?.classes ?? 0,
-              badgeColor: 'bg-blue-500/10 text-blue-500 border-blue-500/20'
+              badgeColor: 'bg-indigo-500/10 text-indigo-500 border-indigo-500/20'
+            },
+            {
+              name: 'grades',
+              label: 'Notlar (RLS)',
+              desc: 'Veliye İzolasyonlu',
+              count: status?.tableCounts?.grades ?? 0,
+              badgeColor: 'bg-rose-500/10 text-rose-500 border-rose-500/20'
+            },
+            {
+              name: 'attendance_records',
+              label: 'Yoklama (RLS)',
+              desc: 'Veliye İzolasyonlu',
+              count: status?.tableCounts?.attendance ?? 0,
+              badgeColor: 'bg-teal-500/10 text-teal-500 border-teal-500/20'
             },
             {
               name: 'assignments',
               label: 'Ödevler',
               desc: 'Verilen Ödevler',
               count: status?.tableCounts?.assignments ?? 0,
-              badgeColor: 'bg-purple-500/10 text-purple-500 border-purple-500/20'
+              badgeColor: 'bg-sky-500/10 text-sky-500 border-sky-500/20'
             },
             {
               name: 'submissions',
               label: 'Teslimler',
               desc: 'Öğrenci Teslimi',
               count: status?.tableCounts?.submissions ?? 0,
-              badgeColor: 'bg-indigo-500/10 text-indigo-500 border-indigo-500/20'
-            },
-            {
-              name: 'grades',
-              label: 'Notlar',
-              desc: 'Sınav & Sözlü',
-              count: status?.tableCounts?.grades ?? 0,
-              badgeColor: 'bg-amber-500/10 text-amber-500 border-amber-500/20'
-            },
-            {
-              name: 'attendance',
-              label: 'Yoklama',
-              desc: 'Devamsızlık',
-              count: status?.tableCounts?.attendance ?? 0,
-              badgeColor: 'bg-teal-500/10 text-teal-500 border-teal-500/20'
+              badgeColor: 'bg-cyan-500/10 text-cyan-500 border-cyan-500/20'
             },
             {
               name: 'announcements',
               label: 'Duyurular',
               desc: 'Okul Bülteni',
               count: status?.tableCounts?.announcements ?? 0,
-              badgeColor: 'bg-rose-500/10 text-rose-500 border-rose-500/20'
+              badgeColor: 'bg-violet-500/10 text-violet-500 border-violet-500/20'
             }
           ].map(table => (
             <div 
@@ -462,6 +483,64 @@ export const SupabaseBackupManagerView: React.FC = () => {
               </div>
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* Row Level Security (RLS) Veli-Öğrenci Güvenlik Mimarisi */}
+      <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                Veli - Öğrenci Row Level Security (RLS) Güvenlik Kuralları
+              </h3>
+              <p className="text-xs text-slate-500">
+                Veritabanı düzeyinde izolasyon: Veliler yalnızca kendi çocuklarının not ve devamsızlık kayıtlarına erişebilir.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="px-3 py-1 rounded-full text-xs font-black bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              RLS Aktif & Denetimli
+            </span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/80 dark:border-slate-800 space-y-2">
+            <div className="flex items-center gap-2 text-xs font-black text-slate-900 dark:text-white">
+              <div className="w-2 h-2 rounded-full bg-amber-500" />
+              <span>1. Veli - Öğrenci Eşleşmesi</span>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+              <code className="text-[11px] font-mono text-purple-600 dark:text-purple-400 font-bold">parent_student_relations</code> tablosu üzerinden her veli yalnızca kendi çocuğunun ID'si veya okul numarasıyla eşleştirilir.
+            </p>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/80 dark:border-slate-800 space-y-2">
+            <div className="flex items-center gap-2 text-xs font-black text-slate-900 dark:text-white">
+              <div className="w-2 h-2 rounded-full bg-rose-500" />
+              <span>2. Notlar İzolasyonu (grades)</span>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+              RLS Policy sayesinde veli SELECT sorgusu çalıştırdığında PostgreSQL sunucusu yalnızca <code className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">student_id IN (çocukları)</code> şartını sağlayan not satırlarını döndürür.
+            </p>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/80 dark:border-slate-800 space-y-2">
+            <div className="flex items-center gap-2 text-xs font-black text-slate-900 dark:text-white">
+              <div className="w-2 h-2 rounded-full bg-teal-500" />
+              <span>3. Devamsızlık İzolasyonu (attendance)</span>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+              Veli başka öğrencilerin devamsızlık ve izin durumlarını göremez. Yalnızca kendi çocuğunun tarih ve özür durum kayıtlarına erişir.
+            </p>
+          </div>
         </div>
       </div>
 

@@ -87,18 +87,24 @@ async function getLiveSupabaseTableCounts(client: SupabaseClient) {
     submissions: 0,
     grades: 0,
     attendance: 0,
-    announcements: 0
+    announcements: 0,
+    students: 0,
+    parents: 0,
+    parentRelations: 0
   };
 
   try {
-    const [p, c, asgn, sub, grd, att, ann] = await Promise.all([
+    const [p, c, asgn, sub, grd, att, ann, std, prt, psr] = await Promise.all([
       client.from('profiles').select('*', { count: 'exact', head: true }),
       client.from('classes').select('*', { count: 'exact', head: true }),
       client.from('assignments').select('*', { count: 'exact', head: true }),
       client.from('assignment_submissions').select('*', { count: 'exact', head: true }),
       client.from('grades').select('*', { count: 'exact', head: true }),
       client.from('attendance_records').select('*', { count: 'exact', head: true }),
-      client.from('announcements').select('*', { count: 'exact', head: true })
+      client.from('announcements').select('*', { count: 'exact', head: true }),
+      Promise.resolve(client.from('students').select('*', { count: 'exact', head: true })).catch(() => ({ count: null })),
+      Promise.resolve(client.from('parents').select('*', { count: 'exact', head: true })).catch(() => ({ count: null })),
+      Promise.resolve(client.from('parent_student_relations').select('*', { count: 'exact', head: true })).catch(() => ({ count: null }))
     ]);
 
     if (p.count !== null) counts.profiles = p.count;
@@ -108,6 +114,9 @@ async function getLiveSupabaseTableCounts(client: SupabaseClient) {
     if (grd.count !== null) counts.grades = grd.count;
     if (att.count !== null) counts.attendance = att.count;
     if (ann.count !== null) counts.announcements = ann.count;
+    if (std && (std as any).count !== null) counts.students = (std as any).count;
+    if (prt && (prt as any).count !== null) counts.parents = (prt as any).count;
+    if (psr && (psr as any).count !== null) counts.parentRelations = (psr as any).count;
   } catch (err) {
     console.warn('[Supabase Table Counts Probe]:', err);
   }
@@ -124,6 +133,9 @@ async function syncAllToSupabaseRelationalTables(client: SupabaseClient, store: 
     grades: 0,
     attendance: 0,
     announcements: 0,
+    students: 0,
+    parents: 0,
+    parentRelations: 0,
     errors: [] as string[]
   };
 
@@ -211,6 +223,70 @@ async function syncAllToSupabaseRelationalTables(client: SupabaseClient, store: 
         });
         if (!pErr) stats.profiles++;
         else stats.errors.push(`Profile (${u.displayName}): ${pErr.message}`);
+      }
+    }
+
+    // 4b. Sync students table
+    if (Array.isArray(store.users) && store.users.length > 0) {
+      const studentUsers = store.users.filter((u: any) => u.role === 'student');
+      for (const st of studentUsers) {
+        const studentUuid = toValidUuid(st.uid);
+        let targetClassUuid: string | null = null;
+        if (st.classGrade) {
+          targetClassUuid = classIdMap.get(st.classGrade.toUpperCase()) || null;
+        }
+        try {
+          const { error: stdErr } = await client.from('students').upsert({
+            id: studentUuid,
+            user_id: studentUuid,
+            full_name: st.displayName || 'Öğrenci',
+            school_number: st.schoolNumber || null,
+            class_id: targetClassUuid
+          });
+          if (!stdErr) stats.students++;
+        } catch {}
+      }
+    }
+
+    // 4c. Sync parents table and parent_student_relations
+    if (Array.isArray(store.users) && store.users.length > 0) {
+      const parentUsers = store.users.filter((u: any) => u.role === 'parent');
+      for (const p of parentUsers) {
+        const parentUuid = toValidUuid(p.uid);
+        try {
+          const { error: prtErr } = await client.from('parents').upsert({
+            id: parentUuid,
+            user_id: parentUuid,
+            full_name: p.displayName || 'Veli',
+            phone: p.phone || null,
+            email: p.email || null,
+            relationship: p.relationship || 'Veli'
+          });
+          if (!prtErr) stats.parents++;
+
+          // Link students in parent_student_relations
+          const matchedStudents = store.users.filter((s: any) => 
+            s.role === 'student' && (
+              (p.studentIds && p.studentIds.includes(s.uid)) ||
+              (p.studentNumbers && s.schoolNumber && p.studentNumbers.includes(s.schoolNumber)) ||
+              (s.parentId && s.parentId === p.uid) ||
+              (p.phone && s.parentPhone && s.parentPhone.replace(/\D/g, '') === p.phone.replace(/\D/g, ''))
+            )
+          );
+
+          for (const child of matchedStudents) {
+            const childUuid = toValidUuid(child.uid);
+            try {
+              const { error: relErr } = await client.from('parent_student_relations').upsert({
+                parent_id: parentUuid,
+                student_id: childUuid,
+                relationship: p.relationship || 'Veli',
+                is_primary: true
+              }, { onConflict: 'parent_id,student_id' });
+              if (!relErr) stats.parentRelations++;
+            } catch {}
+          }
+        } catch {}
       }
     }
 
@@ -482,7 +558,7 @@ app.post('/api/backup/supabase/sync', async (req, res) => {
       stats,
       tableCounts,
       relationalSync: tableSyncStats,
-      message: `Tüm okul verileri ve Supabase tabloları (${tableCounts.profiles} profil, ${tableCounts.classes} sınıf, ${tableCounts.assignments} ödev, ${tableCounts.grades} not, ${tableCounts.attendance} yoklama) başarıyla güncellendi!`
+      message: `Tüm okul verileri ve Supabase tabloları (${tableCounts.profiles} profil, ${tableCounts.classes} sınıf, ${tableCounts.assignments} ödev, ${tableCounts.grades} not, ${tableCounts.attendance} yoklama, ${tableCounts.parents || 0} veli, ${tableCounts.students || 0} öğrenci) başarıyla güncellendi!`
     });
   } catch (err: any) {
     console.error('[Supabase Sync Error]:', err);

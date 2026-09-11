@@ -389,6 +389,9 @@ export interface SupabaseTableCounts {
   grades: number;
   attendance: number;
   announcements: number;
+  students?: number;
+  parents?: number;
+  parentRelations?: number;
 }
 
 export interface SupabaseBackupStatus {

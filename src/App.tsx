@@ -8,7 +8,6 @@ import { TeacherDashboard } from './components/teacher/TeacherDashboard';
 import { StudentDashboard } from './components/student/StudentDashboard';
 import { ParentDashboard } from './components/parent/ParentDashboard';
 import { AdminDashboard } from './components/admin/AdminDashboard';
-import { ChatModule } from './components/chat/ChatModule';
 import { AchievementsView } from './components/achievements/AchievementsView';
 import { WeeklyScheduleView } from './components/schedule/WeeklyScheduleView';
 import { 
@@ -64,7 +63,6 @@ const MainContent: React.FC = () => {
         case 'attendance': return 'E-Yoklama & Devamsızlık Takibi';
         case 'announcements': return 'Okul ve Sınıf Duyuruları';
         case 'students': return 'Öğrenci & Şube Listesi';
-        case 'chat': return 'Mesajlar & Canlı Sohbet';
         case 'achievements': return 'Öğrenci Başarı & Rozet Sistemi';
         default: return 'Öğretmen Paneli';
       }
@@ -76,7 +74,6 @@ const MainContent: React.FC = () => {
         case 'grades': return 'Sınav & Deneme Notlarım';
         case 'attendance': return 'Devamsızlık Durumum & Yoklama';
         case 'announcements': return 'Okul Duyuruları Panosu';
-        case 'chat': return 'Mesajlar & Grup Sohbeti';
         case 'achievements': return 'Başarılarım & Rozetler';
         default: return 'Öğrenci Paneli';
       }
@@ -86,10 +83,11 @@ const MainContent: React.FC = () => {
         case 'schedule': return 'Haftalık Ders Programı Dağılımı & Çizelge';
         case 'overview': return 'Okul İstatistikleri & Özet';
         case 'users': return 'Kullanıcı & Rol Yönetimi';
+        case 'parents': return 'Veli Yönetimi & Excel Toplu Aktarım';
         case 'roles': return 'Firestore Rol & Yetki Atamaları';
         case 'classes': return 'Sınıf & Şube Yapısı';
+        case 'backup': return 'Supabase PostgreSQL Yedekleme & RLS Güvenliği';
         case 'system': return 'Geliştirici & Sistem Ayarları';
-        case 'chat': return 'Okul İçi İletişim & Mesajlar';
         case 'achievements': return 'Öğrenci Başarı & Gamification';
         default: return 'Yönetim Paneli';
       }
@@ -125,9 +123,8 @@ const MainContent: React.FC = () => {
         <main className="flex-1 w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
           {currentUser ? (
             <div>
-              {activeTab === 'chat' && <ChatModule />}
               {activeTab === 'achievements' && <AchievementsView />}
-              {activeTab !== 'chat' && activeTab !== 'achievements' && (
+              {activeTab !== 'achievements' && (
                 <>
                   {currentUser.role === 'teacher' && (
                     activeTab === 'schedule' ? (

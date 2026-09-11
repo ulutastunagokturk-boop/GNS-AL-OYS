@@ -151,14 +151,13 @@ class DataService {
       const saved = localStorage.getItem(CACHE_STORAGE_KEY);
       if (saved) {
         const parsed: LocalCacheStore = JSON.parse(saved);
-        // Only keep admin accounts, purge ulutastunagokturk@gmail.com and all non-admin accounts
+        // Keep accounts while ensuring deleted account remains excluded
         parsed.users = (parsed.users || []).filter(u => {
           const uid = (u.uid || '').toLowerCase();
           const email = (u.email || '').toLowerCase().trim();
           if (
             email === 'ulutastunagokturk@gmail.com' ||
-            uid === 'admin-owner-ulutas' ||
-            u.role !== 'admin'
+            uid === 'admin-owner-ulutas'
           ) {
             return false;
           }
@@ -181,7 +180,7 @@ class DataService {
 
         parsed.roleAssignments = (parsed.roleAssignments || []).filter(ra => {
           const em = (ra.userEmail || '').toLowerCase().trim();
-          return em !== 'ulutastunagokturk@gmail.com' && ra.id !== 'assign-admin-owner' && ra.assignedRole === 'admin';
+          return em !== 'ulutastunagokturk@gmail.com' && ra.id !== 'assign-admin-owner';
         });
 
         try {
@@ -329,13 +328,13 @@ class DataService {
           const userMap = new Map<string, UserProfile>();
           // Preserve local root admin
           userMap.set(INITIAL_ADMIN.uid, INITIAL_ADMIN);
-          // Put existing cache users (admins only)
+          // Put existing cache users
           this.cache.users
-            .filter(u => u.role === 'admin' && (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' && u.uid !== 'admin-owner-ulutas')
+            .filter(u => (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' && u.uid !== 'admin-owner-ulutas')
             .forEach(u => userMap.set(u.uid, u));
-          // Only keep admins from database
+          // Merge database users
           state.users
-            .filter((u: UserProfile) => u.role === 'admin' && (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' && u.uid !== 'admin-owner-ulutas')
+            .filter((u: UserProfile) => (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' && u.uid !== 'admin-owner-ulutas')
             .forEach((u: UserProfile) => userMap.set(u.uid, u));
           this.cache.users = Array.from(userMap.values());
           changed = true;
@@ -572,9 +571,8 @@ class DataService {
         }
       } catch {}
 
-      // Keep only admin users in cache
+      // Keep valid users in cache, excluding deleted user
       this.cache.users = this.cache.users.filter(u => 
-        u.role === 'admin' && 
         (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' &&
         u.uid !== 'admin-owner-ulutas'
       );
@@ -616,27 +614,25 @@ class DataService {
     try {
       const snap = await getDocs(collection(db, 'users'));
       if (!snap.empty) {
-        const remoteAdmins: UserProfile[] = [];
+        const remoteUsers: UserProfile[] = [];
         for (const docSnap of snap.docs) {
           const u = { ...(docSnap.data() as UserProfile), uid: docSnap.id };
           const em = (u.email || '').toLowerCase().trim();
           const isUlutas = em === 'ulutastunagokturk@gmail.com' || docSnap.id === 'admin-owner-ulutas';
-          const isNonAdmin = u.role !== 'admin';
 
-          if (isUlutas || isNonAdmin) {
-            // Delete rogue non-admin or ulutas user from Firestore
+          if (isUlutas) {
             deleteDoc(doc(db, 'users', docSnap.id)).catch(() => {});
           } else {
-            remoteAdmins.push(u);
+            remoteUsers.push(u);
           }
         }
 
         const mergedMap = new Map<string, UserProfile>();
         mergedMap.set(INITIAL_ADMIN.uid, INITIAL_ADMIN);
         this.cache.users
-          .filter(u => u.role === 'admin' && (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' && u.uid !== 'admin-owner-ulutas')
+          .filter(u => (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' && u.uid !== 'admin-owner-ulutas')
           .forEach(u => mergedMap.set(u.uid, u));
-        remoteAdmins.forEach(u => mergedMap.set(u.uid, u));
+        remoteUsers.forEach(u => mergedMap.set(u.uid, u));
 
         this.cache.users = Array.from(mergedMap.values());
         this.saveCache(this.cache);
@@ -836,18 +832,6 @@ class DataService {
         }
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'attendance'));
       this.listeners.set('attendance', unsubAtt);
-
-      // Listen to chat_messages
-      const msgQuery = query(collection(db, 'chat_messages'), orderBy('timestamp', 'asc'));
-      const unsubMsg = onSnapshot(msgQuery, (snapshot) => {
-        if (!snapshot.empty) {
-          const list: ChatMessage[] = [];
-          snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as ChatMessage));
-          this.cache.messages = list;
-          this.saveCache(this.cache);
-        }
-      }, (err) => handleFirestoreError(err, OperationType.LIST, 'chat_messages'));
-      this.listeners.set('chat_messages', unsubMsg);
     } catch (e) {
       console.log('Realtime listener setup note:', e);
     }
@@ -1337,6 +1321,42 @@ class DataService {
     }
 
     this.cache.users = updatedUsers;
+
+    // Create or update role assignments for parent accounts
+    const updatedRoleAssignments = [...this.cache.roleAssignments];
+    for (const p of updatedUsers.filter(u => u.role === 'parent')) {
+      const existingAssignIdx = updatedRoleAssignments.findIndex(ra => ra.userEmail?.toLowerCase() === p.email?.toLowerCase());
+      const roleAssign: RoleAssignment = {
+        id: existingAssignIdx >= 0 ? updatedRoleAssignments[existingAssignIdx].id : `assign-parent-${p.uid}`,
+        userEmail: p.email,
+        userName: p.displayName,
+        assignedRole: 'parent',
+        assignedBy: adminName,
+        assignedAt: new Date().toISOString(),
+        status: 'active',
+        notes: `Excel ile toplu tanımlandı. Bağlı öğrenci no: ${(p.studentNumbers || []).join(', ') || 'Belirtilmedi'}`,
+        permissions: [
+          'Öğrenci Not ve Karne Takibi',
+          'Günlük Devamsızlık ve İzin Bilgisi',
+          'Okul & Sınıf Duyuruları',
+          'Öğretmen & Rehberlik İletişim Bilgileri'
+        ]
+      };
+      if (existingAssignIdx >= 0) {
+        updatedRoleAssignments[existingAssignIdx] = roleAssign;
+      } else {
+        updatedRoleAssignments.push(roleAssign);
+      }
+      setDoc(doc(db, 'role_assignments', roleAssign.id), sanitizeForFirestore(roleAssign), { merge: true }).catch(() => {});
+      setDoc(doc(db, 'users', p.uid), sanitizeForFirestore(p), { merge: true }).catch(() => {});
+    }
+
+    // Persist updated students to Firestore
+    for (const st of updatedUsers.filter(u => u.role === 'student' && u.parentId)) {
+      setDoc(doc(db, 'users', st.uid), sanitizeForFirestore(st), { merge: true }).catch(() => {});
+    }
+
+    this.cache.roleAssignments = updatedRoleAssignments;
     this.saveCache(this.cache);
     this.notifySubscribers();
 
@@ -1350,6 +1370,7 @@ class DataService {
 
     // Sync to Supabase & Firestore
     this.triggerSupabaseBackup('auto').catch(() => {});
+    this.triggerSupabaseTableSync().catch(() => {});
 
     return {
       totalRows: rows.length,

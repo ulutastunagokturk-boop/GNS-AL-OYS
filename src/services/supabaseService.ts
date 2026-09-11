@@ -9,7 +9,12 @@ import {
 const BACKUP_STATUS_KEY = 'gnsial_supabase_backup_status';
 const DEFAULT_TABLE_NAME = 'school_backups';
 
-const SETUP_SQL = `-- Supabase SQL Editor içerisinde çalıştırılacak yedekleme tablosu şeması:
+const SETUP_SQL = `-- ==============================================================================
+-- GNSİAL OYS: VERİTABANI İLİŞKİLERİ VE ROW LEVEL SECURITY (RLS) POLİTİKALARI
+-- Bu SQL kodunu Supabase Dashboard > SQL Editor sekmesinde çalıştırabilirsiniz.
+-- ==============================================================================
+
+-- 1. YEDEKLEME TABLOSU
 CREATE TABLE IF NOT EXISTS public.school_backups (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -18,17 +23,190 @@ CREATE TABLE IF NOT EXISTS public.school_backups (
     payload JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
--- RLS (Row Level Security) ve indeksler
-ALTER TABLE public.school_backups ENABLE ROW LEVEL SECURITY;
+-- 2. VELİLER TABLOSU (parents)
+CREATE TABLE IF NOT EXISTS public.parents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID,
+    full_name TEXT NOT NULL,
+    phone TEXT,
+    email TEXT,
+    relationship TEXT DEFAULT 'Veli',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
--- Okul idaresi veya anon istemcilerin yedek yazabilmesi için erişim kuralı:
+-- 3. ÖĞRENCİLER TABLOSU (students)
+CREATE TABLE IF NOT EXISTS public.students (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID,
+    full_name TEXT NOT NULL,
+    school_number TEXT UNIQUE,
+    class_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 4. VELİ - ÖĞRENCİ İLİŞKİ TABLOSU (parent_student_relations)
+CREATE TABLE IF NOT EXISTS public.parent_student_relations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    parent_id UUID NOT NULL REFERENCES public.parents(id) ON DELETE CASCADE,
+    student_id UUID NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+    relationship TEXT DEFAULT 'Veli',
+    is_primary BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(parent_id, student_id)
+);
+
+-- 5. NOTLAR TABLOSU (grades)
+CREATE TABLE IF NOT EXISTS public.grades (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    student_id UUID NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+    teacher_id UUID,
+    grade_type_id TEXT,
+    subject TEXT NOT NULL,
+    score NUMERIC NOT NULL,
+    max_score NUMERIC DEFAULT 100,
+    comments TEXT,
+    recorded_date TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 6. DEVAMSIZLIK & YOKLAMA TABLOSU (attendance_records)
+CREATE TABLE IF NOT EXISTS public.attendance_records (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    student_id UUID NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+    teacher_id UUID,
+    class_id UUID,
+    date DATE NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('present', 'absent', 'excused', 'late')),
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ==============================================================================
+-- ROW LEVEL SECURITY (RLS) AKTİFLEŞTİRME
+-- ==============================================================================
+ALTER TABLE public.school_backups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.parents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.students ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.parent_student_relations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.grades ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.attendance_records ENABLE ROW LEVEL SECURITY;
+
+-- ------------------------------------------------------------------------------
+-- A. VELİLER (parents) RLS POLİTİKALARI
+-- ------------------------------------------------------------------------------
+DROP POLICY IF EXISTS "Parents can view their own profile" ON public.parents;
+CREATE POLICY "Parents can view their own profile"
+    ON public.parents FOR SELECT
+    TO authenticated
+    USING (auth.uid() = user_id OR auth.uid() = id);
+
+-- ------------------------------------------------------------------------------
+-- B. VELİ-ÖĞRENCİ İLİŞKİLERİ (parent_student_relations) RLS POLİTİKALARI
+-- ------------------------------------------------------------------------------
+DROP POLICY IF EXISTS "Parents can view own children relations" ON public.parent_student_relations;
+CREATE POLICY "Parents can view own children relations"
+    ON public.parent_student_relations FOR SELECT
+    TO authenticated
+    USING (
+        parent_id IN (
+            SELECT p.id FROM public.parents p WHERE p.user_id = auth.uid() OR p.id = auth.uid()
+        )
+    );
+
+-- ------------------------------------------------------------------------------
+-- C. ÖĞRENCİLER (students) RLS POLİTİKALARI
+-- Veli sadece kendi ilişkili çocuğunun öğrenci bilgilerini görebilir.
+-- ------------------------------------------------------------------------------
+DROP POLICY IF EXISTS "Parents can view own linked children" ON public.students;
+CREATE POLICY "Parents can view own linked children"
+    ON public.students FOR SELECT
+    TO authenticated
+    USING (
+        id IN (
+            SELECT psr.student_id 
+            FROM public.parent_student_relations psr
+            JOIN public.parents p ON p.id = psr.parent_id
+            WHERE p.user_id = auth.uid() OR p.id = auth.uid()
+        )
+        OR user_id = auth.uid() -- Öğrenci kendi kartını görebilir
+    );
+
+-- ------------------------------------------------------------------------------
+-- D. NOTLAR (grades) RLS POLİTİKALARI
+-- Veli SADECE kendi çocuğunun sınav/proje notlarını görebilir!
+-- ------------------------------------------------------------------------------
+DROP POLICY IF EXISTS "Parents can ONLY view grades of their own children" ON public.grades;
+CREATE POLICY "Parents can ONLY view grades of their own children"
+    ON public.grades FOR SELECT
+    TO authenticated
+    USING (
+        student_id IN (
+            SELECT psr.student_id 
+            FROM public.parent_student_relations psr
+            JOIN public.parents p ON p.id = psr.parent_id
+            WHERE p.user_id = auth.uid() OR p.id = auth.uid()
+        )
+        OR student_id = auth.uid() -- Öğrenci kendi notunu görebilir
+    );
+
+-- ------------------------------------------------------------------------------
+-- E. DEVAMSIZLIK & YOKLAMA (attendance_records) RLS POLİTİKALARI
+-- Veli SADECE kendi çocuğunun devamsızlık ve izin kayıtlarını görebilir!
+-- ------------------------------------------------------------------------------
+DROP POLICY IF EXISTS "Parents can ONLY view attendance of their own children" ON public.attendance_records;
+CREATE POLICY "Parents can ONLY view attendance of their own children"
+    ON public.attendance_records FOR SELECT
+    TO authenticated
+    USING (
+        student_id IN (
+            SELECT psr.student_id 
+            FROM public.parent_student_relations psr
+            JOIN public.parents p ON p.id = psr.parent_id
+            WHERE p.user_id = auth.uid() OR p.id = auth.uid()
+        )
+        OR student_id = auth.uid() -- Öğrenci kendi devamsızlığını görebilir
+    );
+
+-- ------------------------------------------------------------------------------
+-- F. YÖNETİCİ & ÖĞRETMEN TAM YETKİ POLİTİKALARI
+-- ------------------------------------------------------------------------------
+DROP POLICY IF EXISTS "Teachers and Admins full access grades" ON public.grades;
+CREATE POLICY "Teachers and Admins full access grades"
+    ON public.grades FOR ALL
+    TO authenticated
+    USING (
+        EXISTS (
+            SELECT 1 FROM public.profiles 
+            WHERE (id = auth.uid() OR email = auth.email()) 
+            AND role IN ('teacher', 'admin')
+        )
+    );
+
+DROP POLICY IF EXISTS "Teachers and Admins full access attendance" ON public.attendance_records;
+CREATE POLICY "Teachers and Admins full access attendance"
+    ON public.attendance_records FOR ALL
+    TO authenticated
+    USING (
+        EXISTS (
+            SELECT 1 FROM public.profiles 
+            WHERE (id = auth.uid() OR email = auth.email()) 
+            AND role IN ('teacher', 'admin')
+        )
+    );
+
+DROP POLICY IF EXISTS "Allow school backup operations" ON public.school_backups;
 CREATE POLICY "Allow school backup operations" ON public.school_backups
     FOR ALL
     TO anon, authenticated
     USING (true)
     WITH CHECK (true);
 
-CREATE INDEX IF NOT EXISTS idx_school_backups_created_at ON public.school_backups(created_at DESC);
+-- İndeksler
+CREATE INDEX IF NOT EXISTS idx_parent_student_rel ON public.parent_student_relations(parent_id, student_id);
+CREATE INDEX IF NOT EXISTS idx_grades_student_id ON public.grades(student_id);
+CREATE INDEX IF NOT EXISTS idx_attendance_student_id ON public.attendance_records(student_id);
+CREATE INDEX IF NOT EXISTS idx_school_backups_created ON public.school_backups(created_at DESC);
 `;
 
 class SupabaseBackupManager {
