@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
 import { UserProfile, SchoolClass, RoleAssignment, UserRole } from '../../types';
-import { DeveloperAiSettings } from './DeveloperAiSettings';
 import { WeeklyScheduleView } from '../schedule/WeeklyScheduleView';
 import { SupabaseBackupManagerView } from './SupabaseBackupManagerView';
 import { 
@@ -45,7 +44,7 @@ import { StudentPasswordToolModal } from './StudentPasswordToolModal';
 import { ExcelStudentImportModal } from './ExcelStudentImportModal';
 import { generateUniqueStudentPassword, PasswordStyle } from '../../utils/passwordGenerator';
 
-export type AdminTab = 'overview' | 'users' | 'roles' | 'classes' | 'schedule' | 'backup' | 'system';
+export type AdminTab = 'overview' | 'users' | 'roles' | 'classes' | 'schedule' | 'backup';
 
 interface AdminDashboardProps {
   activeTab?: string;
@@ -555,18 +554,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         >
           <Database className="w-4 h-4 text-emerald-400" />
           Supabase Bulut Yedekleme
-        </button>
-
-        <button
-          onClick={() => setActiveTab('system')}
-          className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold rounded-xl whitespace-nowrap transition cursor-pointer ${
-            activeTab === 'system'
-              ? 'bg-purple-600 text-white shadow-md shadow-purple-600/20'
-              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-          }`}
-        >
-          <Zap className="w-4 h-4 text-amber-300" />
-          Geliştirici & AI Ayarları (Groq Cloud Qwen)
         </button>
       </div>
 
@@ -1290,11 +1277,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <div className="space-y-4 animate-in fade-in">
           <SupabaseBackupManagerView />
         </div>
-      )}
-
-      {/* SYSTEM / DEVELOPER AI SETTINGS TAB */}
-      {activeTab === 'system' && (
-        <DeveloperAiSettings />
       )}
 
       {/* ADD / EDIT CLASS MODAL */}

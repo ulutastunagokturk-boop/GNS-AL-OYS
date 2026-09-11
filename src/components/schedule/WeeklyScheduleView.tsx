@@ -45,13 +45,11 @@ import {
 interface WeeklyScheduleViewProps {
   initialClass?: string;
   initialTeacher?: string;
-  onOpenAiAssistant?: () => void;
 }
 
 export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
   initialClass,
-  initialTeacher,
-  onOpenAiAssistant
+  initialTeacher
 }) => {
   const { currentUser } = useAuth();
 
@@ -79,10 +77,6 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
   const refreshSchedules = () => {
     setAllSchedules([...dataService.getSchedules()]);
   };
-
-  // AI Study Plan Generating state
-  const [aiGenerating, setAiGenerating] = useState(false);
-  const [aiStudyPlanResult, setAiStudyPlanResult] = useState<string | null>(null);
 
   // Live Time Status State
   const [liveStatus, setLiveStatus] = useState<CurrentClassStatus>(() => 
@@ -256,50 +250,6 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
     setTimeout(() => setIsActionSuccess(null), 4000);
   };
 
-  // Handle AI Study Plan generation
-  const handleGenerateAiStudyPlan = async () => {
-    setAiGenerating(true);
-    setAiStudyPlanResult(null);
-
-    try {
-      const targetClass = filterMode === 'class' ? selectedClass : '10-A';
-      const classSlots = allSchedules.filter(s => (s.className || '').toLowerCase() === (targetClass || '').toLowerCase());
-      
-      const prompt = `GNSİAL ${targetClass} sınıfı haftalık ders programı verilerine göre, bir lise öğrencisinin okul çıkışı (16:30 - 22:00 saatleri arası) için 5 günlük etkili, MEB sınavlarına ve YKS'ye yönelik akşam tekrar ve ödev çalışma programı hazırla. Hangi gün hangi dersleri 45'er dakikalık bloklar ve 15 dk molalarla çalışması gerektiğini tablo veya net maddelerle listele.`;
-
-      const response = await fetch('/api/gemini/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [{ role: 'user', content: prompt }],
-          mode: 'study_coach',
-          studentContext: {
-            classGrade: targetClass,
-            homeworkSummary: `${classSlots.length} saat haftalık ders yükü`
-          }
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setAiStudyPlanResult(data.reply || data.text || 'Çalışma planı başarıyla oluşturuldu.');
-      } else {
-        let errorMsg = 'Yapay zeka asistanı şu anda meşgul, lütfen birkaç saniye sonra tekrar deneyin.';
-        try {
-          const errData = await response.json();
-          if (errData.error) errorMsg = errData.error;
-        } catch {
-          // fallback
-        }
-        setAiStudyPlanResult(`⚠️ ${errorMsg}`);
-      }
-    } catch (err) {
-      setAiStudyPlanResult('Haftalık çalışma planı oluşturulurken bir bağlantı hatası oluştu.');
-    } finally {
-      setAiGenerating(false);
-    }
-  };
-
   const currentDayConfig = DAYS_CONFIG.find(d => d.key === selectedDay) || DAYS_CONFIG[0];
 
   return (
@@ -368,15 +318,6 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
               <Printer className="w-4 h-4 text-indigo-300" />
               Resmi Çıktı / Yazdır
             </button>
-
-            <button
-              onClick={handleGenerateAiStudyPlan}
-              disabled={aiGenerating}
-              className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white text-xs font-bold transition flex items-center gap-2 shadow-lg shadow-purple-600/30 cursor-pointer disabled:opacity-50"
-            >
-              <Sparkles className="w-4 h-4 text-yellow-300" />
-              {aiGenerating ? 'AI Planı Hazırlıyor...' : 'AI Çalışma Planı Çıkar'}
-            </button>
           </div>
         </div>
 
@@ -395,30 +336,6 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
           <button onClick={() => setIsActionSuccess(null)} className="text-emerald-600 hover:underline">
             Kapat
           </button>
-        </div>
-      )}
-
-      {/* AI Generated Study Plan Banner (if generated) */}
-      {aiStudyPlanResult && (
-        <div className="p-6 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800 rounded-3xl space-y-4 animate-fade-in">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-purple-900 dark:text-purple-200">
-              <Sparkles className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-              <h3 className="text-sm sm:text-base font-bold">
-                Yapay Zeka (Gemini) Tarafından Oluşturulan Haftalık Çalışma & Tekrar Planı
-              </h3>
-            </div>
-            <button
-              onClick={() => setAiStudyPlanResult(null)}
-              className="text-xs font-bold text-purple-600 dark:text-purple-400 hover:underline cursor-pointer"
-            >
-              Kapat
-            </button>
-          </div>
-
-          <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-purple-100 dark:border-purple-900 text-xs sm:text-sm text-slate-700 dark:text-slate-300 whitespace-pre-line leading-relaxed max-h-80 overflow-y-auto">
-            {aiStudyPlanResult}
-          </div>
         </div>
       )}
 

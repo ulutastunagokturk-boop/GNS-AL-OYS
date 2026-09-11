@@ -296,68 +296,6 @@ export interface SystemAuditLog {
   timestamp: string;
 }
 
-// ================= AI SMART ASSISTANT =================
-export type AiModelMode = 'general' | 'fast' | 'complex' | 'search' | 'study_coach' | 'exam_prep';
-
-export interface GroundingSource {
-  title: string;
-  uri: string;
-}
-
-export interface DuckDuckGoInstantAnswer {
-  heading: string;
-  abstract: string;
-  url: string;
-  image?: string;
-  source?: string;
-}
-
-export interface DuckDuckGoSearchResponse {
-  query: string;
-  category: string;
-  categoryTitle: string;
-  instantAnswer?: DuckDuckGoInstantAnswer;
-  summary?: string;
-  sources: GroundingSource[];
-  relatedTopics: { title: string; url: string }[];
-  duckDuckGoUrl: string;
-  timestamp: string;
-}
-
-export interface AiMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: string;
-  modelUsed?: string;
-  fallbackInfo?: AiFallbackInfo;
-  grounding?: {
-    webSearchQueries?: string[];
-    sources?: GroundingSource[];
-  };
-  isError?: boolean;
-}
-
-export interface AiPresetPrompt {
-  id: string;
-  title: string;
-  prompt: string;
-  category: 'study' | 'exam' | 'search' | 'summary' | 'teacher' | 'motivation';
-  targetRole?: UserRole | 'all';
-  icon?: string;
-  badge?: string;
-}
-
-export interface AiConversationSession {
-  id: string;
-  userId: string;
-  title: string;
-  mode: AiModelMode;
-  messages: AiMessage[];
-  createdAt: string;
-  updatedAt: string;
-}
-
 // ================= WEEKLY SCHEDULE & TIMETABLE =================
 export type DayOfWeek = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday';
 
@@ -394,51 +332,6 @@ export interface ScheduleDutyInfo {
   teacherName: string;
   location: string; // '1. Kat Koridoru', 'Bahçe & Teneffüs Alanı', 'Kantin Katı'
   shift: string; // 'Tam Gün (08:15 - 15:50)'
-}
-
-// ================= DEVELOPER & AI CONFIGURATION =================
-export interface AiProviderConfig {
-  primaryProvider: 'nvidia' | 'groq' | 'local';
-  nvidiaModel?: string;
-  groqModel?: string;
-  geminiModel?: string;
-  isNvidiaConfigured?: boolean;
-  isGroqConfigured: boolean;
-  isGeminiConfigured?: boolean;
-  cascadeOrder: string[];
-  lastCheckTimestamp?: string;
-}
-
-export interface AiFallbackInfo {
-  triggered: boolean;
-  fromProvider?: string;
-  toProvider?: string;
-  reason?: string;
-  groqAttempted?: boolean;
-  latencyMs?: number;
-}
-
-export interface AiDiagnosticTestResult {
-  provider: string;
-  model: string;
-  latencyMs: number;
-  status: 'success' | 'error';
-  responsePreview: string;
-  timestamp: string;
-  error?: string;
-  fallbackInfo?: AiFallbackInfo;
-}
-
-// ================= POLLINATIONS.AI IMAGE GENERATION =================
-export interface GeneratedImageItem {
-  id: string;
-  prompt: string;
-  imageUrl: string;
-  width: number;
-  height: number;
-  model: string;
-  seed?: number;
-  createdAt: string;
 }
 
 // ================= SUPABASE CLOUD BACKUP =================

@@ -11,8 +11,6 @@ import { AdminDashboard } from './components/admin/AdminDashboard';
 import { ChatModule } from './components/chat/ChatModule';
 import { AchievementsView } from './components/achievements/AchievementsView';
 import { WeeklyScheduleView } from './components/schedule/WeeklyScheduleView';
-import { AiAssistantView } from './components/ai/AiAssistantView';
-import { AiFloatingWidget } from './components/ai/AiFloatingWidget';
 import { 
   GraduationCap, 
   BookOpen, 
@@ -40,7 +38,6 @@ const MainContent: React.FC = () => {
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | null>(null);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('homeworks');
-  const [aiPendingPrompt, setAiPendingPrompt] = useState<string>('');
 
   // Reset default active tab on role switch
   useEffect(() => {
@@ -55,14 +52,6 @@ const MainContent: React.FC = () => {
 
   // Section title calculation
   const getSectionTitle = () => {
-    if (activeTab === 'ai-assistant') {
-      return currentUser?.role === 'teacher' 
-        ? 'AI Öğretmen Asistanı (Groq)' 
-        : currentUser?.role === 'student' 
-        ? 'AI Kişisel Rehberlik & Sınav Koçu (Groq)' 
-        : 'AI Asistan Geçidi (Groq)';
-    }
-
     if (!currentUser) {
       if (activeTab === 'schedule') return 'Haftalık Ders Programı & Çizelge';
       return undefined;
@@ -136,14 +125,9 @@ const MainContent: React.FC = () => {
         <main className="flex-1 w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
           {currentUser ? (
             <div>
-              {activeTab === 'ai-assistant' && (
-                <AiAssistantView 
-                  initialPrompt={aiPendingPrompt}
-                />
-              )}
               {activeTab === 'chat' && <ChatModule />}
               {activeTab === 'achievements' && <AchievementsView />}
-              {activeTab !== 'chat' && activeTab !== 'achievements' && activeTab !== 'ai-assistant' && (
+              {activeTab !== 'chat' && activeTab !== 'achievements' && (
                 <>
                   {currentUser.role === 'teacher' && (
                     activeTab === 'schedule' ? (
@@ -236,13 +220,6 @@ const MainContent: React.FC = () => {
         isOpen={authModalMode !== null}
         onClose={() => setAuthModalMode(null)}
       />
-
-      {/* Floating AI Quick Assistant for logged in users (Groq & Pollinations) */}
-      {currentUser && (
-        <AiFloatingWidget 
-          onOpenFullView={() => setActiveTab('ai-assistant')} 
-        />
-      )}
 
     </div>
   );

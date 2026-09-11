@@ -18,7 +18,6 @@
     "@vitejs/plugin-react": "^5.0.4",
     "canvas-confetti": "^1.9.4",
     "dotenv": "^17.2.3",
-    "duck-duck-scrape": "^2.2.7",
     "express": "^4.21.2",
     "firebase": "^12.18.0",
     "lucide-react": "^0.546.0",

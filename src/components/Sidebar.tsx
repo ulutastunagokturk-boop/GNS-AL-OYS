@@ -22,7 +22,6 @@ import {
   MessageSquare,
   Trophy,
   Cpu,
-  Bot,
   Database
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
@@ -116,14 +115,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           sublabel: 'Öğrenci Gamification', 
           icon: Trophy,
           badge: 'XP'
-        },
-        { 
-          id: 'ai-assistant', 
-          label: 'AI Öğretmen Asistanı', 
-          sublabel: 'Ders Planı & Sınav', 
-          icon: Bot,
-          badge: 'Groq',
-          badgeColor: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
         }
       ];
     }
@@ -188,14 +179,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           sublabel: `Seviye ${currentUser.level || 1} • Liderlik`, 
           icon: Trophy,
           badge: `${currentUser.totalXp || 100} XP`
-        },
-        { 
-          id: 'ai-assistant', 
-          label: 'AI Rehber & Koç', 
-          sublabel: 'Kişiselleştirilmiş', 
-          icon: Bot,
-          badge: 'Groq',
-          badgeColor: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
         }
       ];
     }
@@ -302,14 +285,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           label: 'Başarı Sistemi', 
           sublabel: 'Rozetler & Sıralama', 
           icon: Trophy 
-        },
-        { 
-          id: 'ai-assistant', 
-          label: 'AI Asistan (Groq)', 
-          sublabel: 'Yapay Zeka Geçidi', 
-          icon: Bot,
-          badge: 'Groq',
-          badgeColor: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
         }
       ];
     }
