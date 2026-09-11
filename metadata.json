@@ -1,6 +1,6 @@
 {
   "name": "GNSİAL OYS",
-  "description": "Gaziemir Nevvar Salih İşgören Anadolu Lisesi Okul Yönetim Sistemi - Giriş Sayfası, Ödev Takip, E-Yoklama, Sınav Notları, Canlı Sohbet, Ders Programı, DuckDuckGo Arama ve Öğrenci Başarı Portalı.",
+  "description": "Gaziemir Nevvar Salih İşgören Anadolu Lisesi Okul Yönetim Sistemi - Excel ile Toplu Öğrenci Ekleme, Veli Portalı, Giriş Sayfası, Ödev Takip, E-Yoklama, Sınav Notları, Canlı Sohbet, Ders Programı, DuckDuckGo Arama ve Öğrenci Başarı Portalı.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

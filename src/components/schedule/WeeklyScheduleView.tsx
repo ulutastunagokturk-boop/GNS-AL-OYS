@@ -141,10 +141,10 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
   const filteredSlots = allSchedules.filter(slot => {
     // Mode Filter
     if (filterMode === 'class') {
-      if (slot.className.toLowerCase() !== selectedClass.toLowerCase()) return false;
+      if ((slot.className || '').toLowerCase() !== (selectedClass || '').toLowerCase()) return false;
     } else if (filterMode === 'teacher') {
       if (!selectedTeacher) return true;
-      if (!slot.teacherName.toLowerCase().includes(selectedTeacher.toLowerCase())) return false;
+      if (!(slot.teacherName || '').toLowerCase().includes((selectedTeacher || '').toLowerCase())) return false;
     }
 
     // Subject Filter
@@ -156,10 +156,10 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       return (
-        slot.subject.toLowerCase().includes(q) ||
-        slot.teacherName.toLowerCase().includes(q) ||
-        slot.classroom.toLowerCase().includes(q) ||
-        (slot.topic && slot.topic.toLowerCase().includes(q))
+        (slot.subject || '').toLowerCase().includes(q) ||
+        (slot.teacherName || '').toLowerCase().includes(q) ||
+        (slot.classroom || '').toLowerCase().includes(q) ||
+        Boolean(slot.topic && slot.topic.toLowerCase().includes(q))
       );
     }
 
@@ -209,7 +209,7 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
       return;
     }
 
-    const sourceSlots = allSchedules.filter(s => s.className.toLowerCase() === cloneSourceClass.toLowerCase());
+    const sourceSlots = allSchedules.filter(s => (s.className || '').toLowerCase() === (cloneSourceClass || '').toLowerCase());
     if (sourceSlots.length === 0) {
       alert(`${cloneSourceClass} şubesinde henüz kayıtlı ders bulunmuyor.`);
       return;
@@ -220,7 +220,7 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
     }
 
     // Delete existing target slots then add cloned slots
-    const targetSlots = allSchedules.filter(s => s.className.toLowerCase() === cloneTargetClass.toLowerCase());
+    const targetSlots = allSchedules.filter(s => (s.className || '').toLowerCase() === (cloneTargetClass || '').toLowerCase());
     for (const ts of targetSlots) {
       await dataService.deleteScheduleSlot(ts.id, currentUser?.displayName || 'Yönetici');
     }
@@ -263,7 +263,7 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
 
     try {
       const targetClass = filterMode === 'class' ? selectedClass : '10-A';
-      const classSlots = allSchedules.filter(s => s.className.toLowerCase() === targetClass.toLowerCase());
+      const classSlots = allSchedules.filter(s => (s.className || '').toLowerCase() === (targetClass || '').toLowerCase());
       
       const prompt = `GNSİAL ${targetClass} sınıfı haftalık ders programı verilerine göre, bir lise öğrencisinin okul çıkışı (16:30 - 22:00 saatleri arası) için 5 günlük etkili, MEB sınavlarına ve YKS'ye yönelik akşam tekrar ve ödev çalışma programı hazırla. Hangi gün hangi dersleri 45'er dakikalık bloklar ve 15 dk molalarla çalışması gerektiğini tablo veya net maddelerle listele.`;
 
@@ -586,21 +586,7 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
                     <option key={t.uid} value={t.displayName}>{t.displayName} ({t.branch || 'Öğretmen'})</option>
                   ))
                 ) : (
-                  [
-                    'Ahmet Yılmaz',
-                    'Zeynep Kaya',
-                    'Mustafa Demir',
-                    'Elif Şahin',
-                    'Canan Çelik',
-                    'Burak Öztürk',
-                    'Hakan Yıldız',
-                    'Seda Aydın',
-                    'Merve Korkmaz',
-                    'Onur Arslan',
-                    'Serdar Güven'
-                  ].map(name => (
-                    <option key={name} value={name}>{name}</option>
-                  ))
+                  <option disabled value="">Henüz kayıtlı öğretmen bulunmamaktadır</option>
                 )}
               </select>
             )}
@@ -1050,43 +1036,53 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {DEFAULT_DUTY_ROSTER.map(duty => {
-              const dayObj = DAYS_CONFIG.find(d => d.key === duty.day);
-              return (
-                <div key={duty.day} className="p-5 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black uppercase text-indigo-600 dark:text-indigo-400 bg-indigo-100 dark:bg-indigo-950/80 px-2.5 py-1 rounded-lg">
-                      {dayObj?.label}
-                    </span>
-                    <span className="text-[11px] text-slate-500">
-                      {duty.shift}
-                    </span>
-                  </div>
+          {DEFAULT_DUTY_ROSTER.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {DEFAULT_DUTY_ROSTER.map(duty => {
+                const dayObj = DAYS_CONFIG.find(d => d.key === duty.day);
+                return (
+                  <div key={duty.day} className="p-5 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black uppercase text-indigo-600 dark:text-indigo-400 bg-indigo-100 dark:bg-indigo-950/80 px-2.5 py-1 rounded-lg">
+                        {dayObj?.label}
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        {duty.shift}
+                      </span>
+                    </div>
 
-                  <div className="space-y-1">
-                    <span className="text-[11px] text-slate-400 uppercase font-semibold block">
-                      Nöbetçi Öğretmen
-                    </span>
-                    <div className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                      <User className="w-3.5 h-3.5 text-slate-400" />
-                      {duty.teacherName}
+                    <div className="space-y-1">
+                      <span className="text-[11px] text-slate-400 uppercase font-semibold block">
+                        Nöbetçi Öğretmen
+                      </span>
+                      <div className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                        <User className="w-3.5 h-3.5 text-slate-400" />
+                        {duty.teacherName}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1 pt-2 border-t border-slate-200/50 dark:border-slate-700/50">
+                      <span className="text-[11px] text-slate-400 uppercase font-semibold block">
+                        Nöbet Yeri / Görev Alanı
+                      </span>
+                      <div className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                        <MapPin className="w-3.5 h-3.5 text-rose-500" />
+                        {duty.location}
+                      </div>
                     </div>
                   </div>
-
-                  <div className="space-y-1 pt-2 border-t border-slate-200/50 dark:border-slate-700/50">
-                    <span className="text-[11px] text-slate-400 uppercase font-semibold block">
-                      Nöbet Yeri / Görev Alanı
-                    </span>
-                    <div className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                      <MapPin className="w-3.5 h-3.5 text-rose-500" />
-                      {duty.location}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="p-10 text-center rounded-3xl bg-slate-50 dark:bg-slate-800/30 border border-dashed border-slate-200 dark:border-slate-700/80">
+              <ShieldCheck className="w-10 h-10 mx-auto text-slate-300 dark:text-slate-600 mb-2" />
+              <p className="font-bold text-sm text-slate-700 dark:text-slate-300">Tanımlı Nöbet Çizelgesi Bulunmuyor</p>
+              <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                Haftalık öğretmen nöbet görev dağılımı okul yönetimi tarafından belirlendiğinde burada listelenecektir.
+              </p>
+            </div>
+          )}
         </div>
       )}
 

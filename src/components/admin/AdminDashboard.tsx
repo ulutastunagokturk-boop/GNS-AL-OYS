@@ -4,6 +4,7 @@ import { dataService } from '../../services/dataService';
 import { UserProfile, SchoolClass, RoleAssignment, UserRole } from '../../types';
 import { DeveloperAiSettings } from './DeveloperAiSettings';
 import { WeeklyScheduleView } from '../schedule/WeeklyScheduleView';
+import { SupabaseBackupManagerView } from './SupabaseBackupManagerView';
 import { 
   ShieldCheck, 
   Users, 
@@ -36,15 +37,19 @@ import {
   Sliders,
   Zap,
   Eye,
-  EyeOff
+  EyeOff,
+  FileSpreadsheet
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { StudentPasswordToolModal } from './StudentPasswordToolModal';
+import { ExcelStudentImportModal } from './ExcelStudentImportModal';
 import { generateUniqueStudentPassword, PasswordStyle } from '../../utils/passwordGenerator';
+
+export type AdminTab = 'overview' | 'users' | 'roles' | 'classes' | 'schedule' | 'backup' | 'system';
 
 interface AdminDashboardProps {
   activeTab?: string;
-  onTabChange?: (tab: 'overview' | 'users' | 'roles' | 'classes' | 'schedule' | 'system') => void;
+  onTabChange?: (tab: AdminTab) => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -52,10 +57,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onTabChange
 }) => {
   const { currentUser } = useAuth();
-  const [internalTab, setInternalTab] = useState<'overview' | 'users' | 'roles' | 'classes' | 'schedule' | 'system'>('overview');
+  const [internalTab, setInternalTab] = useState<AdminTab>('overview');
 
   const activeTab = (controlledTab as any) || internalTab;
-  const setActiveTab = (tab: 'overview' | 'users' | 'roles' | 'classes' | 'schedule' | 'system') => {
+  const setActiveTab = (tab: AdminTab) => {
     setInternalTab(tab);
     if (onTabChange) onTabChange(tab);
   };
@@ -64,10 +69,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [searchUser, setSearchUser] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
   const [classFilter, setClassFilter] = useState<string>('all');
-  const [resetSuccess, setResetSuccess] = useState(false);
 
   // Dedicated Student Password Tool Modal State
   const [isPasswordToolOpen, setIsPasswordToolOpen] = useState(false);
+  const [isExcelImportOpen, setIsExcelImportOpen] = useState(false);
   const [visibleTablePasswordUid, setVisibleTablePasswordUid] = useState<string | null>(null);
   const [copiedTablePasswordUid, setCopiedTablePasswordUid] = useState<string | null>(null);
 
@@ -282,16 +287,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const filteredClasses = classes.filter(c => {
-    const matchSearch = c.name.toLowerCase().includes(classSearchQuery.toLowerCase()) ||
-                         c.branch.toLowerCase().includes(classSearchQuery.toLowerCase()) ||
-                         (c.advisorTeacher && c.advisorTeacher.toLowerCase().includes(classSearchQuery.toLowerCase()));
+    const matchSearch = (c.name || '').toLowerCase().includes(classSearchQuery.toLowerCase()) ||
+                         (c.branch || '').toLowerCase().includes(classSearchQuery.toLowerCase()) ||
+                         ((c.advisorTeacher || '').toLowerCase().includes(classSearchQuery.toLowerCase()));
     const matchGrade = classGradeFilter === 'all' || String(c.gradeLevel) === classGradeFilter;
     return matchSearch && matchGrade;
   });
 
   const handleRoleChange = async (userId: string, newRole: 'admin' | 'teacher' | 'student') => {
     const userToChange = dataService.getUserById(userId);
-    if (userToChange?.email.toLowerCase() === 'tlogixtr@gmail.com') {
+    if (userToChange?.email?.toLowerCase() === 'tlogixtr@gmail.com') {
       alert('Kök Yönetici (Root Admin) hesabı rolü değiştirilemez.');
       return;
     }
@@ -308,7 +313,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleToggleUserStatus = async (userId: string, currentStatus?: 'active' | 'deactivated') => {
     const userToToggle = dataService.getUserById(userId);
-    if (userToToggle?.email.toLowerCase() === 'tlogixtr@gmail.com') {
+    if (userToToggle?.email?.toLowerCase() === 'tlogixtr@gmail.com') {
       alert('Kök Yönetici (Root Admin) hesabı askıya alınamaz.');
       return;
     }
@@ -320,7 +325,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleDeleteUser = async (userId: string, userName: string) => {
     const userToDelete = dataService.getUserById(userId);
-    if (userToDelete?.email.toLowerCase() === 'tlogixtr@gmail.com') {
+    if (userToDelete?.email?.toLowerCase() === 'tlogixtr@gmail.com') {
       alert('Kök Yönetici (Root Admin) hesabı sistemden silinemez.');
       return;
     }
@@ -399,20 +404,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleResetData = () => {
-    if (window.confirm('Tüm okul portalı verilerini başlangıç örnek durumuna sıfırlamak istediğinize emin misiniz?')) {
-      dataService.resetToFullDemoData();
-      setResetSuccess(true);
-      try {
-        confetti({ particleCount: 50, spread: 70 });
-      } catch (e) {}
-      setTimeout(() => setResetSuccess(false), 4000);
-    }
-  };
-
   const filteredUsers = users.filter(u => {
-    const matchSearch = u.displayName.toLowerCase().includes(searchUser.toLowerCase()) || 
-                        u.email.toLowerCase().includes(searchUser.toLowerCase()) ||
+    const matchSearch = (u.displayName || '').toLowerCase().includes(searchUser.toLowerCase()) || 
+                        (u.email || '').toLowerCase().includes(searchUser.toLowerCase()) ||
                         (u.schoolNumber && u.schoolNumber.includes(searchUser));
     const matchRole = roleFilter === 'all' || u.role === roleFilter;
     const matchClass = classFilter === 'all' || u.classGrade === classFilter;
@@ -478,28 +472,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <KeyRound className="w-4 h-4" />
               <span>Yeni Rol / Yetki Tanımla</span>
             </button>
-
-            <button
-              id="admin-reset-demo-db-btn"
-              onClick={handleResetData}
-              className="py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 text-white text-xs font-bold flex items-center gap-2 transition cursor-pointer"
-              title="Okul Veritabanını Varsayılana Sıfırla"
-            >
-              <RefreshCw className="w-4 h-4 text-purple-300" />
-              Sıfırla
-            </button>
           </div>
         </div>
       </div>
-
-      {resetSuccess && (
-        <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs flex items-center gap-2 animate-in fade-in">
-          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-          <span>
-            Veritabanı başarıyla başlangıç kadrosu, sınıflar ve sınav kayıtlarıyla sıfırlandı ve önbellek güncellendi!
-          </span>
-        </div>
-      )}
 
       {addUserSuccess && (
         <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs font-bold flex items-center gap-2 animate-in fade-in">
@@ -560,7 +535,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         <button
           onClick={() => setActiveTab('schedule')}
-          className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold rounded-xl whitespace-nowrap transition ${
+          className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold rounded-xl whitespace-nowrap transition cursor-pointer ${
             activeTab === 'schedule'
               ? 'bg-purple-600 text-white shadow-md shadow-purple-600/20'
               : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -571,8 +546,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </button>
 
         <button
+          onClick={() => setActiveTab('backup')}
+          className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold rounded-xl whitespace-nowrap transition cursor-pointer ${
+            activeTab === 'backup'
+              ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <Database className="w-4 h-4 text-emerald-400" />
+          Supabase Bulut Yedekleme
+        </button>
+
+        <button
           onClick={() => setActiveTab('system')}
-          className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold rounded-xl whitespace-nowrap transition ${
+          className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold rounded-xl whitespace-nowrap transition cursor-pointer ${
             activeTab === 'system'
               ? 'bg-purple-600 text-white shadow-md shadow-purple-600/20'
               : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -648,6 +635,63 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             >
               <Plus className="w-4 h-4" />
               Rol Ata & Kaydet
+            </button>
+          </div>
+
+          {/* Supabase Dual-Cloud Backup Callout */}
+          <div className="p-5 rounded-2xl bg-gradient-to-r from-emerald-950/30 via-slate-900/60 to-slate-900 border border-emerald-500/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0">
+                <Database className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="font-extrabold text-sm text-white">
+                    Supabase PostgreSQL İkincil Yedekleme
+                  </h4>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                    Asenkron Çift Yazma
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Firestore ile eşzamanlı olarak okul kayıtları PostgreSQL veritabanına otomatik aktarılır.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setActiveTab('backup')}
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm shrink-0 transition cursor-pointer"
+            >
+              <span>Yedekleme Merkezini Aç</span>
+            </button>
+          </div>
+
+          {/* Quick Bulk Import Banner */}
+          <div className="p-5 rounded-2xl bg-gradient-to-r from-teal-950/30 via-slate-900/60 to-slate-900 border border-teal-500/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-10 h-10 rounded-xl bg-teal-500/10 border border-teal-500/30 text-teal-400 flex items-center justify-center shrink-0">
+                <FileSpreadsheet className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="font-extrabold text-sm text-white">
+                    Excel ile Toplu Öğrenci & Veli Kayıt Sistemi
+                  </h4>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-500/20 text-teal-400 border border-teal-500/30">
+                    Hızlı İçe Aktarma
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  e-Okul veya Excel (.xlsx, .xls, .csv) listelerini tek tıkla yükleyin. Sınıflar, öğrenciler ve veli erişimleri anında oluşturulur.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setIsExcelImportOpen(true)}
+              className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm shrink-0 transition cursor-pointer"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>Excel Tablosu Yükle</span>
             </button>
           </div>
 
@@ -828,6 +872,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </button>
 
               <button
+                id="admin-excel-import-btn"
+                onClick={() => setIsExcelImportOpen(true)}
+                className="py-2 px-3.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                title="Excel (.xlsx, .xls) veya CSV dosyasından toplu öğrenci ve veli ekleyin"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>📊 Excel ile Toplu Öğrenci Ekle</span>
+              </button>
+
+              <button
                 id="admin-add-student-btn"
                 onClick={() => {
                   handleRoleSelect('student');
@@ -891,7 +945,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                 {filteredUsers.map(u => {
-                  const isRootAdmin = u.email.toLowerCase() === 'tlogixtr@gmail.com';
+                  const isRootAdmin = (u.email || '').toLowerCase() === 'tlogixtr@gmail.com';
                   return (
                     <tr key={u.uid} className={`transition ${u.status === 'deactivated' ? 'opacity-50 bg-rose-50/20 dark:bg-rose-950/10' : isRootAdmin ? 'bg-amber-50/20 dark:bg-amber-950/10 hover:bg-amber-50/40 dark:hover:bg-amber-950/20' : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40'}`}>
                       <td className="py-3 px-4 font-bold text-slate-700 dark:text-slate-300">
@@ -1228,6 +1282,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {activeTab === 'schedule' && (
         <div className="space-y-4 animate-in fade-in">
           <WeeklyScheduleView />
+        </div>
+      )}
+
+      {/* SUPABASE CLOUD BACKUP TAB */}
+      {activeTab === 'backup' && (
+        <div className="space-y-4 animate-in fade-in">
+          <SupabaseBackupManagerView />
         </div>
       )}
 
@@ -1764,6 +1825,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         isOpen={isPasswordToolOpen}
         onClose={() => setIsPasswordToolOpen(false)}
         currentUserDisplayName={currentUser?.displayName || 'Sistem Yöneticisi'}
+      />
+
+      {/* Bulk Student Import from Excel Modal */}
+      <ExcelStudentImportModal
+        isOpen={isExcelImportOpen}
+        onClose={() => setIsExcelImportOpen(false)}
       />
 
     </div>

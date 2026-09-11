@@ -22,7 +22,8 @@ import {
   MessageSquare,
   Trophy,
   Cpu,
-  Bot
+  Bot,
+  Database
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 
@@ -199,6 +200,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ];
     }
 
+    if (currentUser.role === 'parent') {
+      const parentChildren = dataService.getStudentsForParent(currentUser);
+      const childCount = parentChildren.length;
+      return [
+        {
+          id: 'overview',
+          label: 'Öğrenci Durum Özeti',
+          sublabel: childCount > 1 ? `${childCount} Öğrenci Kayıtlı` : (parentChildren[0]?.displayName || 'Öğrenci'),
+          icon: GraduationCap,
+          badge: 'Veli'
+        },
+        {
+          id: 'grades',
+          label: 'Ders Notları & Sınavlar',
+          sublabel: 'Yazılı & Performans',
+          icon: Award
+        },
+        {
+          id: 'attendance',
+          label: 'Devamsızlık Takibi',
+          sublabel: 'E-Yoklama Bilgileri',
+          icon: UserCheck
+        },
+        {
+          id: 'homeworks',
+          label: 'Ödev & Görevler',
+          sublabel: 'Öğretmen Takibi',
+          icon: BookOpen
+        },
+        {
+          id: 'schedule',
+          label: 'Haftalık Ders Programı',
+          sublabel: 'Ders Saatleri',
+          icon: Calendar
+        },
+        {
+          id: 'announcements',
+          label: 'Okul Duyuruları',
+          sublabel: 'İdare Bilgilendirme',
+          icon: Megaphone,
+          badge: `${announcements.length}`
+        }
+      ];
+    }
+
     if (currentUser.role === 'admin') {
       return [
         { 
@@ -228,6 +274,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           sublabel: `${classes.length} Aktif Şube`, 
           icon: School, 
           badge: `${classes.length}` 
+        },
+        { 
+          id: 'backup', 
+          label: 'Supabase Yedekleme', 
+          sublabel: 'İkincil PostgreSQL Deposu', 
+          icon: Database, 
+          badge: 'Cloud',
+          badgeColor: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
         },
         { 
           id: 'system', 
@@ -389,6 +443,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         ? `${currentUser.branch || 'Branş'} Öğretmeni`
                         : currentUser.role === 'student'
                         ? `${currentUser.classGrade || 'Sınıf'} • No: ${currentUser.schoolNumber || '-'}`
+                        : currentUser.role === 'parent'
+                        ? 'Öğrenci Velisi'
                         : 'Okul Müdürü'}
                     </p>
                   </div>

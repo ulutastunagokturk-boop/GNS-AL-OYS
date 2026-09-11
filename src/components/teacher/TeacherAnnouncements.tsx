@@ -110,11 +110,12 @@ export const TeacherAnnouncements: React.FC = () => {
 
   // Filter logic
   const filtered = announcements.filter(a => {
+    const q = search.toLowerCase();
     const matchSearch = 
-      a.title.toLowerCase().includes(search.toLowerCase()) || 
-      a.content.toLowerCase().includes(search.toLowerCase()) ||
-      a.authorName.toLowerCase().includes(search.toLowerCase()) ||
-      (a.tags && a.tags.some(t => t.toLowerCase().includes(search.toLowerCase())));
+      (a.title || '').toLowerCase().includes(q) || 
+      (a.content || '').toLowerCase().includes(q) ||
+      (a.authorName || '').toLowerCase().includes(q) ||
+      (a.tags && a.tags.some(t => (t || '').toLowerCase().includes(q)));
 
     const matchAudience = 
       audienceFilter === 'all' || 

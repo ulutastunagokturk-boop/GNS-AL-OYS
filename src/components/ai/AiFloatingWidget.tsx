@@ -20,7 +20,8 @@ import {
   Plus,
   Mic,
   MicOff,
-  ChevronDown
+  ChevronDown,
+  AlertCircle
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
@@ -418,6 +419,12 @@ export const AiFloatingWidget: React.FC<AiFloatingWidgetProps> = ({ onOpenFullVi
               <Send className="w-3.5 h-3.5" />
             </button>
           </form>
+
+          {/* Bottom Disclaimer */}
+          <div className="px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 text-center flex items-center justify-center gap-1.5 text-[10px] text-slate-500 dark:text-slate-400 font-medium">
+            <AlertCircle className="w-3 h-3 text-amber-500 shrink-0" />
+            <span>Yapay zeka hata yapabilir.</span>
+          </div>
         </>
       )}
     </aside>

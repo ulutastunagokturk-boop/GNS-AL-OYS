@@ -63,10 +63,11 @@ export const StudentPasswordToolModal: React.FC<StudentPasswordToolModalProps> =
 
   // Filtered students
   const filteredStudents = students.filter(s => {
+    const q = (studentSearch || '').toLowerCase();
     const matchesSearch = 
-      s.displayName.toLowerCase().includes(studentSearch.toLowerCase()) ||
+      (s.displayName || '').toLowerCase().includes(q) ||
       (s.schoolNumber && s.schoolNumber.includes(studentSearch)) ||
-      (s.classGrade && s.classGrade.toLowerCase().includes(studentSearch.toLowerCase()));
+      (s.classGrade && s.classGrade.toLowerCase().includes(q));
 
     const matchesClass = selectedClass === 'all' || s.classGrade === selectedClass;
     return matchesSearch && matchesClass;

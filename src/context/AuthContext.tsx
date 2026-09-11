@@ -14,7 +14,7 @@ interface AuthContextType {
   loginWithEmail: (email: string, pass?: string, rememberMe?: boolean) => Promise<UserProfile>;
   loginWithSchoolNumber: (schoolNumber: string, pass?: string, rememberMe?: boolean) => Promise<UserProfile>;
   loginWithPhoneOrEmail: (identifier: string, pass?: string, rememberMe?: boolean) => Promise<UserProfile>;
-  loginAsDemoUser: (demoId: string, rememberMe?: boolean) => void;
+  loginParent: (identifier: string, pass?: string, rememberMe?: boolean) => Promise<UserProfile>;
   registerStudent: (data: {
     schoolNumber: string;
     displayName: string;
@@ -150,9 +150,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!clean) {
       throw new Error('Lütfen telefon numaranızı veya e-posta adresinizi giriniz.');
     }
-    let user = dataService.getUserByPhoneOrEmail(clean);
-    if (!user) {
+    // Attempt real-time Firestore sync first for multi-device sync
+    let user: UserProfile | undefined;
+    try {
       user = (await dataService.findAndSyncUserFromFirestore({ identifier: clean })) || undefined;
+    } catch {}
+    if (!user) {
+      user = dataService.getUserByPhoneOrEmail(clean);
     }
     if (!user) {
       throw new Error(`'${identifier}' bilgisiyle eşleşen bir kullanıcı hesabı bulunamadı. Lütfen okul idaresi ile iletişime geçiniz.`);
@@ -169,9 +173,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!cleanEmail) {
       throw new Error('Lütfen e-posta adresinizi giriniz.');
     }
-    let user = dataService.getUsers().find(u => u.email?.toLowerCase() === cleanEmail);
-    if (!user) {
+    let user: UserProfile | undefined;
+    try {
       user = (await dataService.findAndSyncUserFromFirestore({ email: cleanEmail })) || undefined;
+    } catch {}
+    if (!user) {
+      user = dataService.getUsers().find(u => u.email?.toLowerCase() === cleanEmail);
     }
     if (!user) {
       throw new Error('Bu e-posta adresiyle kayıtlı kullanıcı bulunamadı.');
@@ -194,10 +201,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error('Lütfen okul idareniz tarafından verilen öğrenci şifrenizi giriniz.');
     }
 
-    let user = dataService.getUserBySchoolNumber(cleanNo);
-    if (!user) {
-      // Sync from Firestore directly!
+    // Attempt real-time Firestore sync first for multi-device sync
+    let user: UserProfile | undefined;
+    try {
       user = (await dataService.findAndSyncUserFromFirestore({ schoolNumber: cleanNo })) || undefined;
+    } catch {}
+    if (!user) {
+      user = dataService.getUserBySchoolNumber(cleanNo);
     }
 
     if (!user) {
@@ -222,18 +232,92 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return user;
   };
 
-  const loginAsDemoUser = (demoId: string, rememberMe: boolean = false) => {
-    const user = dataService.getUserById(demoId);
-    if (user) {
-      saveUserSession(user, rememberMe);
-      try {
-        confetti({
-          particleCount: 30,
-          spread: 60,
-          origin: { y: 0.8 }
-        });
-      } catch (e) {}
+  const loginParent = async (identifier: string, pass?: string, rememberMe: boolean = false): Promise<UserProfile> => {
+    const cleanId = identifier.trim();
+    if (!cleanId) {
+      throw new Error('Lütfen öğrenci okul numarasını, veli telefonunu veya e-posta adresini giriniz.');
     }
+    const cleanPass = pass?.trim();
+    if (!cleanPass) {
+      throw new Error('Lütfen veli giriş şifrenizi giriniz.');
+    }
+
+    const cleanDigits = cleanId.replace(/\D/g, '');
+
+    let parentUser: UserProfile | undefined = undefined;
+
+    // 1. Try finding parent by direct phone or email
+    const allUsers = dataService.getUsers();
+    parentUser = allUsers.find(u => 
+      u.role === 'parent' && (
+        (cleanDigits && u.phone && (u.phone.replace(/\D/g, '') === cleanDigits || u.phone.replace(/\D/g, '').endsWith(cleanDigits))) ||
+        (u.email && u.email.toLowerCase() === cleanId.toLowerCase())
+      )
+    );
+
+    // 2. If not found and input looks like a student school number, look up student
+    if (!parentUser) {
+      let student = dataService.getUserBySchoolNumber(cleanId);
+      if (!student) {
+        try {
+          student = (await dataService.findAndSyncUserFromFirestore({ schoolNumber: cleanId })) || undefined;
+        } catch {}
+      }
+
+      if (student) {
+        // Find existing parent linked to this student
+        parentUser = allUsers.find(u => 
+          u.role === 'parent' && (
+            (u.studentIds && u.studentIds.includes(student!.uid)) ||
+            (u.studentNumbers && u.studentNumbers.includes(student!.schoolNumber || cleanId)) ||
+            (student!.parentId && u.uid === student!.parentId)
+          )
+        );
+
+        // If no separate parent account exists yet, automatically create one linked to this student
+        if (!parentUser) {
+          const autoParent: UserProfile = {
+            uid: `parent-${cleanId}-${Date.now()}`,
+            displayName: student.parentName || `${student.displayName} Velisi`,
+            email: `veli.${cleanId}@gnsial.meb.k12.tr`,
+            phone: student.parentPhone || '',
+            role: 'parent',
+            password: cleanPass,
+            status: 'active',
+            studentIds: [student.uid],
+            studentNumbers: [cleanId],
+            createdAt: new Date().toISOString()
+          };
+          await dataService.addUserProfile(autoParent);
+          await dataService.updateUserProfile(student.uid, {
+            parentId: autoParent.uid,
+            parentName: autoParent.displayName
+          });
+          parentUser = autoParent;
+        }
+      }
+    }
+
+    if (!parentUser) {
+      throw new Error(`'${identifier}' bilgisine ait veli veya öğrenci kaydı bulunamadı. Lütfen okul idareniz ile iletişime geçiniz.`);
+    }
+
+    if (parentUser.status === 'deactivated') {
+      throw new Error('Veli hesabınız okul yönetimi tarafından dondurulmuştur.');
+    }
+
+    // Verify parent password
+    if (parentUser.password) {
+      if (parentUser.password !== cleanPass) {
+        throw new Error('Girdiğiniz veli şifresi hatalıdır. Lütfen şifrenizi kontrol edip tekrar deneyiniz.');
+      }
+    } else {
+      await dataService.updateUserProfile(parentUser.uid, { password: cleanPass });
+      parentUser.password = cleanPass;
+    }
+
+    saveUserSession(parentUser, rememberMe);
+    return parentUser;
   };
 
   const registerStudent = async (data: {
@@ -324,7 +408,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loginWithEmail,
         loginWithSchoolNumber,
         loginWithPhoneOrEmail,
-        loginAsDemoUser,
+        loginParent,
         registerStudent,
         registerTeacher,
         logout,

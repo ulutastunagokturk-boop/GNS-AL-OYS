@@ -36,7 +36,9 @@ import {
   RoleAssignment, 
   AnnouncementViewer,
   WeeklyScheduleSlot,
-  DayOfWeek
+  DayOfWeek,
+  ExcelStudentRow,
+  ExcelImportSummary
 } from '../types';
 import { 
   INITIAL_CLASSES, 
@@ -51,6 +53,7 @@ import {
 } from './seedData';
 import { generateDefaultSchedule } from './scheduleData';
 import { generateUniqueStudentPassword } from '../utils/passwordGenerator';
+import { supabaseBackupService } from './supabaseService';
 
 export enum OperationType {
   CREATE = 'create',
@@ -84,9 +87,32 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   console.error('Firestore Error: ', JSON.stringify(errInfo));
 }
 
+/**
+ * Strips all undefined fields recursively so Firestore setDoc/updateDoc never fails
+ * with 'Unsupported field value: undefined'.
+ */
+export function sanitizeForFirestore<T>(data: T): T {
+  if (data === null || data === undefined) {
+    return null as any;
+  }
+  if (Array.isArray(data)) {
+    return data.map(item => sanitizeForFirestore(item)) as any;
+  }
+  if (typeof data === 'object' && !(data instanceof Date)) {
+    const clean: Record<string, any> = {};
+    for (const [key, value] of Object.entries(data as Record<string, any>)) {
+      if (value !== undefined) {
+        clean[key] = sanitizeForFirestore(value);
+      }
+    }
+    return clean as any;
+  }
+  return data;
+}
+
 const CACHE_STORAGE_KEY = 'gnisal_oys_manual_classes_v11';
 
-interface LocalCacheStore {
+export interface LocalCacheStore {
   users: UserProfile[];
   roleAssignments: RoleAssignment[];
   announcements: Announcement[];
@@ -123,12 +149,43 @@ class DataService {
       const saved = localStorage.getItem(CACHE_STORAGE_KEY);
       if (saved) {
         const parsed: LocalCacheStore = JSON.parse(saved);
-        // Purge only legacy obsolete mock emails if any
-        parsed.users = (parsed.users || []).filter(u => 
-          u.email !== 'yonetim@okul.k12.tr' && 
-          u.email !== 'canan.ozkan@okul.k12.tr' &&
-          u.email !== 'ahmet.yilmaz@okul.k12.tr'
+        // Purge any test or legacy mock accounts
+        parsed.users = (parsed.users || []).filter(u => {
+          const uid = (u.uid || '').toLowerCase();
+          const email = (u.email || '').toLowerCase();
+          const name = (u.displayName || '').toLowerCase();
+          if (
+            uid === 'test-user' || 
+            uid === 'sync-test-device-check' || 
+            uid === 'user-1788116379466-295' || 
+            uid === 'user-1788848295245-674' || 
+            uid.includes('sync-test') || 
+            email.includes('test-device') || 
+            email === '123@123' || 
+            email === '123@gnsial.k12.tr' || 
+            name === 'test' || 
+            name === '123' || 
+            name === 'cihaz eşitleme testi'
+          ) {
+            return false;
+          }
+          return (
+            u.email !== 'yonetim@okul.k12.tr' && 
+            u.email !== 'canan.ozkan@okul.k12.tr' &&
+            u.email !== 'ahmet.yilmaz@okul.k12.tr'
+          );
+        });
+
+        // Purge any mock generated schedule slots from cache
+        parsed.schedules = (parsed.schedules || []).filter(s => 
+          !s.id.startsWith('slot-10A-') &&
+          !s.id.startsWith('slot-9A-') &&
+          !s.id.startsWith('slot-10B-') &&
+          !s.id.startsWith('slot-11A-') &&
+          !s.id.startsWith('slot-11B-') &&
+          !s.id.startsWith('slot-12A-')
         );
+
         if (!parsed.users.some(u => u.email?.toLowerCase() === INITIAL_ADMIN.email.toLowerCase())) {
           parsed.users.unshift(INITIAL_ADMIN);
         }
@@ -161,8 +218,8 @@ class DataService {
             localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(parsed));
           } catch {}
         }
-        if (!parsed.schedules || parsed.schedules.length === 0) {
-          parsed.schedules = generateDefaultSchedule();
+        if (!parsed.schedules) {
+          parsed.schedules = [];
         }
         if (!parsed.scheduleNotes) {
           parsed.scheduleNotes = {};
@@ -173,8 +230,18 @@ class DataService {
       console.warn('Could not read from localStorage', e);
     }
 
-    // Pure Clean Initial State with only tlogixtr@gmail.com Root Admin
-    const allUsers = [INITIAL_ADMIN];
+    // Pure Clean Initial State with both Root Admins
+    const ownerAdmin: UserProfile = {
+      uid: 'admin-owner-ulutas',
+      email: 'ulutastunagokturk@gmail.com',
+      displayName: 'Tuna Göktürk Ulutaş (Yönetici)',
+      role: 'admin',
+      phone: '0555 000 0001',
+      status: 'active',
+      isOnline: true,
+      createdAt: new Date().toISOString()
+    };
+    const allUsers = [INITIAL_ADMIN, ownerAdmin];
     
     const initialRoleAssignments: RoleAssignment[] = [
       {
@@ -186,6 +253,23 @@ class DataService {
         assignedAt: new Date().toISOString(),
         status: 'active',
         notes: 'Ana Yönetici (Root Admin) tam yetkili sistem yöneticisi',
+        permissions: [
+          'Tam Sistem ve Veritabanı Erişimi',
+          'Yeni Yönetici (Admin) ve Öğretmen Atama',
+          'Tüm Not, Sınav ve Devamsızlık Yönetimi',
+          'Öğrenci ve Sınıf Kayıt İşlemleri',
+          'Firestore Güvenlik & Sistem Logları'
+        ]
+      },
+      {
+        id: 'assign-admin-owner',
+        userEmail: ownerAdmin.email,
+        userName: ownerAdmin.displayName,
+        assignedRole: 'admin',
+        assignedBy: 'Sistem Kurucusu / Kök Yetkili',
+        assignedAt: new Date().toISOString(),
+        status: 'active',
+        notes: 'Okul Müdürü & Sistem Yöneticisi',
         permissions: [
           'Tam Sistem ve Veritabanı Erişimi',
           'Yeni Yönetici (Admin) ve Öğretmen Atama',
@@ -223,7 +307,7 @@ class DataService {
       conversations: [],
       messages: [],
       systemLogs: systemLogs,
-      schedules: generateDefaultSchedule(),
+      schedules: [],
       scheduleNotes: {},
       lastUpdated: Date.now()
     };
@@ -240,6 +324,21 @@ class DataService {
       console.warn('LocalStorage limit reached or disabled', e);
     }
     this.notifySubscribers();
+
+    // Supabase İkincil Bulut Yedeklemesi (Arka Plan Asenkron Çalışan)
+    try {
+      supabaseBackupService.scheduleAutoBackup(store);
+    } catch (err) {
+      console.warn('[DataService] Failed to schedule auto backup to Supabase:', err);
+    }
+  }
+
+  public async triggerSupabaseBackup(type: 'auto' | 'manual' = 'manual') {
+    return supabaseBackupService.triggerBackup(this.cache, type);
+  }
+
+  public async triggerSupabaseTableSync() {
+    return supabaseBackupService.syncAllToDatabase(this.cache);
   }
 
   public subscribe(callback: () => void): () => void {
@@ -255,11 +354,328 @@ class DataService {
 
   private async initData() {
     try {
+      // 1. First sync from live Supabase PostgreSQL database tables and backups
+      await this.syncFromSupabaseDatabase();
+
+      // 2. Setup Firestore listeners & sync
       this.setupFirestoreListeners();
       await this.syncUsersFromFirestore();
+      await this.seedInitialAdminIfMissing();
+      await this.seedInitialClassesAndSchedulesIfMissing();
+
+      // 3. Ensure live relational database has current classes and users
+      await this.seedSupabaseIfEmpty();
+
       this.isInitialized = true;
+      this.setupLiveSyncPolling();
     } catch (err) {
       console.log('Running in local-first cached mode with Firebase fallback', err);
+    }
+  }
+
+  /**
+   * Supabase PostgreSQL veritabanından tüm güncel okul verilerini çeker
+   */
+  public async syncFromSupabaseDatabase(silent: boolean = false): Promise<boolean> {
+    try {
+      const { success, state } = await supabaseBackupService.fetchDatabaseState();
+      if (success && state && typeof state === 'object') {
+        let changed = false;
+
+        if (Array.isArray(state.users) && state.users.length > 0) {
+          const userMap = new Map<string, UserProfile>();
+          // Preserve local root admin
+          userMap.set(INITIAL_ADMIN.uid, INITIAL_ADMIN);
+          // Put existing cache users
+          this.cache.users.forEach(u => userMap.set(u.uid, u));
+          // Overwrite with live database users
+          state.users.forEach(u => userMap.set(u.uid, u));
+          this.cache.users = Array.from(userMap.values());
+          changed = true;
+        }
+
+        if (Array.isArray(state.classes) && state.classes.length > 0) {
+          const classMap = new Map<string, SchoolClass>();
+          this.cache.classes.forEach(c => classMap.set(c.id, c));
+          state.classes.forEach(c => classMap.set(c.id, c));
+          this.cache.classes = Array.from(classMap.values());
+          changed = true;
+        }
+
+        if (Array.isArray(state.announcements) && state.announcements.length > 0) {
+          const annMap = new Map<string, Announcement>();
+          this.cache.announcements.forEach(a => annMap.set(a.id, a));
+          state.announcements.forEach(a => annMap.set(a.id, a));
+          this.cache.announcements = Array.from(annMap.values());
+          changed = true;
+        }
+
+        if (Array.isArray(state.homeworks) && state.homeworks.length > 0) {
+          const hwMap = new Map<string, Homework>();
+          this.cache.homeworks.forEach(h => hwMap.set(h.id, h));
+          state.homeworks.forEach(h => hwMap.set(h.id, h));
+          this.cache.homeworks = Array.from(hwMap.values());
+          changed = true;
+        }
+
+        if (Array.isArray(state.submissions) && state.submissions.length > 0) {
+          const subMap = new Map<string, HomeworkSubmission>();
+          this.cache.submissions.forEach(s => subMap.set(s.id, s));
+          state.submissions.forEach(s => subMap.set(s.id, s));
+          this.cache.submissions = Array.from(subMap.values());
+          changed = true;
+        }
+
+        if (Array.isArray(state.grades) && state.grades.length > 0) {
+          const grdMap = new Map<string, GradeRecord>();
+          this.cache.grades.forEach(g => grdMap.set(g.id, g));
+          state.grades.forEach(g => grdMap.set(g.id, g));
+          this.cache.grades = Array.from(grdMap.values());
+          changed = true;
+        }
+
+        if (Array.isArray(state.attendance) && state.attendance.length > 0) {
+          const attMap = new Map<string, AttendanceRecord>();
+          this.cache.attendance.forEach(a => attMap.set(a.id, a));
+          state.attendance.forEach(a => attMap.set(a.id, a));
+          this.cache.attendance = Array.from(attMap.values());
+          changed = true;
+        }
+
+        if (Array.isArray(state.schedules) && state.schedules.length > 0) {
+          this.cache.schedules = state.schedules;
+          changed = true;
+        }
+
+        if (Array.isArray(state.roleAssignments) && state.roleAssignments.length > 0) {
+          this.cache.roleAssignments = state.roleAssignments;
+          changed = true;
+        }
+
+        if (changed) {
+          try {
+            localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(this.cache));
+          } catch {}
+          this.notifySubscribers();
+          if (!silent) {
+            console.log('[DataService] Canlı Supabase veritabanından veriler başarıyla yüklendi!');
+          }
+        }
+        return true;
+      }
+    } catch (e) {
+      if (!silent) console.warn('[DataService] syncFromSupabaseDatabase note:', e);
+    }
+    return false;
+  }
+
+  private async seedSupabaseIfEmpty() {
+    try {
+      const status = await supabaseBackupService.getStatus();
+      const hasNoRecords = !status.tableCounts || (status.tableCounts.profiles === 0 && status.tableCounts.classes === 0);
+      if (hasNoRecords && status.configured) {
+        console.log('[DataService] Supabase tabloları henüz boş, ilk veri yüklemesi yapılıyor...');
+        await supabaseBackupService.syncAllToDatabase(this.cache);
+      }
+    } catch (e) {
+      console.warn('[DataService] seedSupabaseIfEmpty note:', e);
+    }
+  }
+
+  private liveSyncTimer: any = null;
+  private setupLiveSyncPolling() {
+    if (this.liveSyncTimer) return;
+    this.liveSyncTimer = setInterval(() => {
+      this.syncFromSupabaseDatabase(true);
+    }, 15000);
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', () => {
+        this.syncFromSupabaseDatabase(true);
+      });
+    }
+  }
+
+  /**
+   * Ensures initial classes exist in Firestore.
+   */
+  private async seedInitialClassesAndSchedulesIfMissing() {
+    try {
+      const classesSnap = await getDocs(collection(db, 'classes'));
+      if (classesSnap.empty) {
+        for (const c of INITIAL_CLASSES) {
+          await setDoc(doc(db, 'classes', c.id), sanitizeForFirestore(c));
+        }
+      }
+    } catch (e) {
+      console.log('[Firestore] seedInitialClasses note:', e);
+    }
+  }
+
+  /**
+   * Complete multi-device cloud synchronization utility.
+   */
+  public async forceSyncAllWithFirestore(): Promise<{
+    success: boolean;
+    syncedUsersCount: number;
+    syncedClassesCount: number;
+    syncedSchedulesCount: number;
+    message: string;
+    error?: string;
+  }> {
+    try {
+      // 1. Push any local users missing in Firestore
+      for (const u of this.cache.users) {
+        try {
+          const uDocRef = doc(db, 'users', u.uid);
+          const snap = await getDoc(uDocRef);
+          if (!snap.exists()) {
+            await setDoc(uDocRef, sanitizeForFirestore(u));
+          }
+        } catch {}
+      }
+
+      // 2. Fetch all users from Firestore and merge
+      await this.syncUsersFromFirestore();
+
+      // 3. Seed classes & schedules if missing in Firestore
+      await this.seedInitialClassesAndSchedulesIfMissing();
+
+      // 4. Also push any local role assignments missing
+      for (const ra of (this.cache.roleAssignments || [])) {
+        try {
+          const raRef = doc(db, 'role_assignments', ra.id);
+          const rSnap = await getDoc(raRef);
+          if (!rSnap.exists()) {
+            await setDoc(raRef, sanitizeForFirestore(ra));
+          }
+        } catch {}
+      }
+
+      // 5. Query latest classes
+      const cSnap = await getDocs(collection(db, 'classes'));
+      if (!cSnap.empty) {
+        const clsList: SchoolClass[] = [];
+        cSnap.forEach(d => {
+          const raw = d.data() as any;
+          clsList.push({
+            id: d.id,
+            name: raw.name || '',
+            gradeLevel: raw.gradeLevel || 9,
+            branch: raw.branch || raw.section || (raw.name ? raw.name.split('-')[1] : 'A') || 'A',
+            advisorTeacher: raw.advisorTeacher || '',
+            capacity: raw.capacity || 30
+          });
+        });
+        this.cache.classes = clsList;
+      }
+
+      // 6. Query latest schedules
+      const sSnap = await getDocs(collection(db, 'schedules'));
+      if (!sSnap.empty) {
+        const schedList: WeeklyScheduleSlot[] = [];
+        sSnap.forEach(d => schedList.push({ id: d.id, ...(d.data() as WeeklyScheduleSlot) }));
+        this.cache.schedules = schedList;
+      }
+
+      this.saveCache(this.cache);
+      this.notifySubscribers();
+
+      return {
+        success: true,
+        syncedUsersCount: this.cache.users.length,
+        syncedClassesCount: this.cache.classes.length,
+        syncedSchedulesCount: this.cache.schedules.length,
+        message: `Bulut veritabanı ile tam eşitleme tamamlandı! ${this.cache.users.length} kullanıcı, ${this.cache.classes.length} sınıf ve ${this.cache.schedules.length} program hazır.`
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        syncedUsersCount: this.cache.users.length,
+        syncedClassesCount: this.cache.classes.length,
+        syncedSchedulesCount: this.cache.schedules.length,
+        message: 'Eşitleme hatası: ' + (e.message || String(e)),
+        error: e.message || String(e)
+      };
+    }
+  }
+
+  /**
+   * Ensures INITIAL_ADMIN and owner admin exist in Firestore.
+   */
+  private async seedInitialAdminIfMissing() {
+    try {
+      const adminDocRef = doc(db, 'users', INITIAL_ADMIN.uid);
+      const adminSnap = await getDoc(adminDocRef);
+      if (!adminSnap.exists()) {
+        await setDoc(adminDocRef, sanitizeForFirestore(INITIAL_ADMIN));
+        console.log('[Firestore] Seeded INITIAL_ADMIN to Firestore');
+      }
+
+      const ownerAdmin: UserProfile = {
+        uid: 'admin-owner-ulutas',
+        email: 'ulutastunagokturk@gmail.com',
+        displayName: 'Tuna Göktürk Ulutaş (Yönetici)',
+        role: 'admin',
+        phone: '0555 000 0001',
+        status: 'active',
+        isOnline: true,
+        createdAt: new Date().toISOString()
+      };
+      const ownerDocRef = doc(db, 'users', ownerAdmin.uid);
+      const ownerSnap = await getDoc(ownerDocRef);
+      if (!ownerSnap.exists()) {
+        await setDoc(ownerDocRef, sanitizeForFirestore(ownerAdmin));
+      }
+
+      // Also ensure any non-test users currently in local cache are synced to Firestore if missing
+      for (const u of this.cache.users) {
+        if (
+          u.uid === 'test-user' || 
+          u.uid === 'sync-test-device-check' || 
+          u.uid === 'user-1788116379466-295' || 
+          u.uid === 'user-1788848295245-674' || 
+          u.displayName === 'test' || 
+          u.displayName === '123' ||
+          u.email?.includes('test-device')
+        ) {
+          continue;
+        }
+        try {
+          const userDocRef = doc(db, 'users', u.uid);
+          const uSnap = await getDoc(userDocRef);
+          if (!uSnap.exists()) {
+            await setDoc(userDocRef, sanitizeForFirestore(u));
+          }
+        } catch {}
+      }
+    } catch (err) {
+      console.log('[Firestore] seedInitialAdmin note:', err);
+    }
+  }
+
+  /**
+   * Diagnostic test to check live Firestore latency and document health.
+   */
+  public async testFirestoreConnection(): Promise<{ success: boolean; latencyMs: number; userCount: number; message: string; error?: string }> {
+    const start = performance.now();
+    try {
+      const snap = await getDocs(collection(db, 'users'));
+      const latency = Math.round(performance.now() - start);
+      return {
+        success: true,
+        latencyMs: latency,
+        userCount: snap.size,
+        message: `Firestore veritabanı aktif ve bağlı. (${snap.size} kullanıcı kaydı doğrulandı)`
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        latencyMs: Math.round(performance.now() - start),
+        userCount: 0,
+        message: 'Firestore bağlantı hatası: ' + (e.message || String(e)),
+        error: e.message || String(e)
+      };
     }
   }
 
@@ -307,14 +723,17 @@ class DataService {
           remoteUsers.push(u);
 
           if (!found) {
-            if (criteria.schoolNumber && (u.schoolNumber === criteria.schoolNumber.trim() || (u.role === 'student' && u.email?.includes(criteria.schoolNumber.trim())))) {
+            const targetSchool = criteria.schoolNumber?.trim();
+            const targetEmail = criteria.email?.trim().toLowerCase();
+            const targetPhone = criteria.phone?.replace(/\D/g, '');
+
+            if (targetSchool && (u.schoolNumber === targetSchool || (u.role === 'student' && u.email?.includes(targetSchool)))) {
               found = u;
-            } else if (criteria.email && u.email?.toLowerCase() === criteria.email.trim().toLowerCase()) {
+            } else if (targetEmail && u.email?.toLowerCase() === targetEmail) {
               found = u;
-            } else if (criteria.phone && u.phone) {
+            } else if (targetPhone && u.phone) {
               const uClean = u.phone.replace(/\D/g, '');
-              const searchClean = criteria.phone.replace(/\D/g, '');
-              if (uClean === searchClean || uClean.endsWith(searchClean) || searchClean.endsWith(uClean)) {
+              if (uClean === targetPhone || uClean.endsWith(targetPhone) || targetPhone.endsWith(uClean)) {
                 found = u;
               }
             } else if (criteria.identifier) {
@@ -420,12 +839,70 @@ class DataService {
       const unsubClasses = onSnapshot(classesQuery, (snapshot) => {
         if (!snapshot.empty) {
           const list: SchoolClass[] = [];
-          snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as SchoolClass));
+          snapshot.forEach(doc => {
+            const raw = doc.data() as any;
+            list.push({
+              id: doc.id,
+              name: raw.name || '',
+              gradeLevel: raw.gradeLevel || 9,
+              branch: raw.branch || raw.section || (raw.name ? raw.name.split('-')[1] : 'A') || 'A',
+              advisorTeacher: raw.advisorTeacher || '',
+              capacity: raw.capacity || 30
+            });
+          });
           this.cache.classes = list;
           this.saveCache(this.cache);
         }
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'classes'));
       this.listeners.set('classes', unsubClasses);
+
+      // Listen to schedules
+      const schedQuery = collection(db, 'schedules');
+      const unsubSched = onSnapshot(schedQuery, (snapshot) => {
+        if (!snapshot.empty) {
+          const list: WeeklyScheduleSlot[] = [];
+          snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as WeeklyScheduleSlot));
+          this.cache.schedules = list;
+          this.saveCache(this.cache);
+        }
+      }, (err) => handleFirestoreError(err, OperationType.LIST, 'schedules'));
+      this.listeners.set('schedules', unsubSched);
+
+      // Listen to grades
+      const gradesQuery = query(collection(db, 'grades'), orderBy('examDate', 'desc'));
+      const unsubGrades = onSnapshot(gradesQuery, (snapshot) => {
+        if (!snapshot.empty) {
+          const list: GradeRecord[] = [];
+          snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as GradeRecord));
+          this.cache.grades = list;
+          this.saveCache(this.cache);
+        }
+      }, (err) => handleFirestoreError(err, OperationType.LIST, 'grades'));
+      this.listeners.set('grades', unsubGrades);
+
+      // Listen to attendance
+      const attQuery = query(collection(db, 'attendance'), orderBy('date', 'desc'));
+      const unsubAtt = onSnapshot(attQuery, (snapshot) => {
+        if (!snapshot.empty) {
+          const list: AttendanceRecord[] = [];
+          snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as AttendanceRecord));
+          this.cache.attendance = list;
+          this.saveCache(this.cache);
+        }
+      }, (err) => handleFirestoreError(err, OperationType.LIST, 'attendance'));
+      this.listeners.set('attendance', unsubAtt);
+
+      // Listen to chat_messages
+      const msgQuery = query(collection(db, 'chat_messages'), orderBy('timestamp', 'asc'));
+      const unsubMsg = onSnapshot(msgQuery, (snapshot) => {
+        if (!snapshot.empty) {
+          const list: ChatMessage[] = [];
+          snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as ChatMessage));
+          this.cache.messages = list;
+          this.saveCache(this.cache);
+        }
+      }, (err) => handleFirestoreError(err, OperationType.LIST, 'chat_messages'));
+      this.listeners.set('chat_messages', unsubMsg);
     } catch (e) {
       console.log('Realtime listener setup note:', e);
     }
@@ -454,7 +931,10 @@ class DataService {
 
   public getUserBySchoolNumber(schoolNo: string): UserProfile | undefined {
     const cleanNo = schoolNo.trim();
-    return this.cache.users.find(u => u.schoolNumber === cleanNo || (u.role === 'student' && u.email.includes(cleanNo)));
+    return this.cache.users.find(u => 
+      (u.schoolNumber && u.schoolNumber.trim() === cleanNo) || 
+      (u.role === 'student' && u.email?.includes(cleanNo))
+    );
   }
 
   public getUserByPhone(phone: string): UserProfile | undefined {
@@ -486,10 +966,10 @@ class DataService {
     // Otherwise or as fallback, check email, username, or exact school number
     const lower = trimmed.toLowerCase();
     return this.cache.users.find(u => 
-      u.email.toLowerCase() === lower || 
+      (u.email && u.email.toLowerCase() === lower) || 
       (u.phone && u.phone.replace(/\D/g, '') === cleanDigits) ||
-      u.schoolNumber === trimmed ||
-      u.displayName.toLowerCase() === lower
+      (u.schoolNumber && u.schoolNumber.trim() === trimmed) ||
+      (u.displayName && u.displayName.toLowerCase() === lower)
     );
   }
 
@@ -533,7 +1013,7 @@ class DataService {
     );
 
     try {
-      await setDoc(doc(db, 'users', fullProfile.uid), fullProfile);
+      await setDoc(doc(db, 'users', fullProfile.uid), sanitizeForFirestore(fullProfile));
     } catch (err) {
       console.log('Firebase sync background write:', err);
     }
@@ -563,7 +1043,7 @@ class DataService {
     );
 
     try {
-      await setDoc(doc(db, 'users', fullProfile.uid), fullProfile);
+      await setDoc(doc(db, 'users', fullProfile.uid), sanitizeForFirestore(fullProfile));
     } catch (err) {
       console.log('Firebase sync background write:', err);
     }
@@ -576,7 +1056,7 @@ class DataService {
     this.saveCache({ ...this.cache, users: updatedUsers });
 
     try {
-      await setDoc(doc(db, 'users', uid), { ...updates, updatedAt: new Date().toISOString() }, { merge: true });
+      await setDoc(doc(db, 'users', uid), sanitizeForFirestore({ ...updates, updatedAt: new Date().toISOString() }), { merge: true });
     } catch (e) {
       console.log('Firestore user update note:', e);
     }
@@ -584,6 +1064,191 @@ class DataService {
 
   public getRoleAssignments(): RoleAssignment[] {
     return this.cache.roleAssignments || [];
+  }
+
+  /**
+   * Retrieves all student profiles associated with a parent user.
+   */
+  public getStudentsForParent(parent: UserProfile): UserProfile[] {
+    if (!parent || parent.role !== 'parent') return [];
+    const allStudents = this.cache.users.filter(u => u.role === 'student');
+    return allStudents.filter(s => {
+      if (parent.studentIds && parent.studentIds.includes(s.uid)) return true;
+      if (parent.studentNumbers && s.schoolNumber && parent.studentNumbers.includes(s.schoolNumber)) return true;
+      if (s.parentId && s.parentId === parent.uid) return true;
+      if (parent.phone && s.parentPhone && s.parentPhone.replace(/\D/g, '') === parent.phone.replace(/\D/g, '')) return true;
+      return false;
+    });
+  }
+
+  /**
+   * Bulk imports student list and creates/links parent accounts from Excel data.
+   */
+  public async bulkImportStudentsFromExcel(rows: ExcelStudentRow[]): Promise<ExcelImportSummary> {
+    let importedStudents = 0;
+    let createdParents = 0;
+    let skippedOrErrors = 0;
+    const errors: { row: number; reason: string }[] = [];
+
+    const updatedUsers = [...this.cache.users];
+    const updatedClasses = [...this.cache.classes];
+    const affectedUids: string[] = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowIdx = i + 1;
+      const cleanName = row.name?.trim();
+      const cleanSchoolNo = row.schoolNumber ? String(row.schoolNumber).trim() : '';
+      const cleanClass = row.classGrade ? String(row.classGrade).trim().toUpperCase() : '';
+
+      if (!cleanName || !cleanSchoolNo || !cleanClass) {
+        skippedOrErrors++;
+        errors.push({ row: rowIdx, reason: 'Ad Soyad, Okul No veya Sınıf/Şube bilgisi eksik.' });
+        continue;
+      }
+
+      // Ensure class exists
+      const existingClass = updatedClasses.find(c => c.name.toUpperCase() === cleanClass);
+      if (!existingClass) {
+        const newClassId = `class-${cleanClass.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
+        const newClassObj: SchoolClass = {
+          id: newClassId,
+          name: cleanClass,
+          gradeLevel: parseInt(cleanClass.split('-')[0]) || 9,
+          branch: cleanClass.includes('-') ? cleanClass.split('-')[1] : cleanClass,
+          capacity: 34,
+          advisorTeacher: 'Atanmadı'
+        };
+        updatedClasses.push(newClassObj);
+      }
+
+      // Check if student exists
+      const existingStudentIdx = updatedUsers.findIndex(u => 
+        u.role === 'student' && u.schoolNumber === cleanSchoolNo
+      );
+
+      const studentUid = existingStudentIdx >= 0 
+        ? updatedUsers[existingStudentIdx].uid 
+        : `student-${cleanSchoolNo}-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+
+      const studentPass = row.password?.trim() || 
+        (existingStudentIdx >= 0 && updatedUsers[existingStudentIdx].password 
+          ? updatedUsers[existingStudentIdx].password 
+          : generateUniqueStudentPassword({ schoolNumber: cleanSchoolNo }));
+
+      // Parent handling
+      let parentUid: string | undefined = undefined;
+      const cleanParentName = row.parentName?.trim();
+      const cleanParentPhone = row.parentPhone?.trim();
+      const cleanParentEmail = row.parentEmail?.trim().toLowerCase();
+      const cleanParentPass = row.parentPassword?.trim() || `veli${cleanSchoolNo}`;
+
+      if (cleanParentName || cleanParentPhone || cleanParentEmail) {
+        // Search if parent already exists (by phone or email)
+        const existingParentIdx = updatedUsers.findIndex(u => 
+          u.role === 'parent' && (
+            (cleanParentPhone && u.phone && u.phone.replace(/\D/g, '') === cleanParentPhone.replace(/\D/g, '')) ||
+            (cleanParentEmail && u.email && u.email.toLowerCase() === cleanParentEmail)
+          )
+        );
+
+        if (existingParentIdx >= 0) {
+          const existingParent = updatedUsers[existingParentIdx];
+          const newStudentIds = Array.from(new Set([...(existingParent.studentIds || []), studentUid]));
+          const newStudentNumbers = Array.from(new Set([...(existingParent.studentNumbers || []), cleanSchoolNo]));
+          updatedUsers[existingParentIdx] = {
+            ...existingParent,
+            studentIds: newStudentIds,
+            studentNumbers: newStudentNumbers,
+            updatedAt: new Date().toISOString()
+          };
+          parentUid = existingParent.uid;
+          affectedUids.push(parentUid);
+        } else {
+          parentUid = `parent-${cleanSchoolNo}-${Date.now()}`;
+          const newParent: UserProfile = {
+            uid: parentUid,
+            displayName: cleanParentName || `${cleanName} Velisi`,
+            email: cleanParentEmail || `veli.${cleanSchoolNo}@gnsial.meb.k12.tr`,
+            phone: cleanParentPhone || '',
+            role: 'parent',
+            password: cleanParentPass,
+            status: 'active',
+            studentIds: [studentUid],
+            studentNumbers: [cleanSchoolNo],
+            createdAt: new Date().toISOString()
+          };
+          updatedUsers.push(newParent);
+          affectedUids.push(parentUid);
+          createdParents++;
+        }
+      }
+
+      const studentProfile: UserProfile = {
+        uid: studentUid,
+        displayName: cleanName,
+        schoolNumber: cleanSchoolNo,
+        classGrade: cleanClass,
+        role: 'student',
+        email: `ogrenci.${cleanSchoolNo}@gnsial.meb.k12.tr`,
+        password: studentPass,
+        status: 'active',
+        parentId: parentUid,
+        parentName: cleanParentName || (parentUid ? `${cleanName} Velisi` : undefined),
+        parentPhone: cleanParentPhone,
+        totalXp: existingStudentIdx >= 0 ? (updatedUsers[existingStudentIdx].totalXp || 100) : 100,
+        level: existingStudentIdx >= 0 ? (updatedUsers[existingStudentIdx].level || 1) : 1,
+        createdAt: existingStudentIdx >= 0 ? updatedUsers[existingStudentIdx].createdAt : new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (existingStudentIdx >= 0) {
+        updatedUsers[existingStudentIdx] = { ...updatedUsers[existingStudentIdx], ...studentProfile };
+      } else {
+        updatedUsers.push(studentProfile);
+      }
+      affectedUids.push(studentUid);
+      importedStudents++;
+    }
+
+    // Save locally
+    this.cache.users = updatedUsers;
+    this.cache.classes = updatedClasses;
+    this.saveCache(this.cache);
+
+    this.logSystemAction(
+      'Excel Toplu Öğrenci İçe Aktarma',
+      'Sistem Yöneticisi',
+      'admin',
+      'all-students',
+      `Excel dosyasından ${importedStudents} öğrenci ve ${createdParents} veli hesabı başarıyla kaydedildi.`
+    );
+
+    // Sync affected users to Firestore in batches
+    try {
+      const batch = writeBatch(db);
+      const uniqueAffected = Array.from(new Set(affectedUids));
+      for (const uid of uniqueAffected) {
+        const u = updatedUsers.find(x => x.uid === uid);
+        if (u) {
+          batch.set(doc(db, 'users', uid), sanitizeForFirestore(u), { merge: true });
+        }
+      }
+      await batch.commit();
+    } catch (e) {
+      console.log('Batch firestore sync note:', e);
+    }
+
+    // Dual-write to Supabase asynchronously
+    this.triggerSupabaseBackup('auto').catch(() => {});
+
+    return {
+      totalRows: rows.length,
+      importedStudents,
+      createdParents,
+      skippedOrErrors,
+      errors
+    };
   }
 
   public async assignUserRole(data: {
@@ -601,7 +1266,7 @@ class DataService {
   }): Promise<{ user: UserProfile; assignment: RoleAssignment }> {
     const trimmedEmail = data.userEmail.trim().toLowerCase();
     const existingUser = this.cache.users.find(u => 
-      u.email.toLowerCase() === trimmedEmail || 
+      (u.email && u.email.toLowerCase() === trimmedEmail) || 
       (data.schoolNumber && u.schoolNumber === data.schoolNumber)
     );
 
@@ -659,7 +1324,7 @@ class DataService {
       permissions: data.permissions
     };
 
-    const currentAssignments = (this.cache.roleAssignments || []).filter(a => a.userEmail.toLowerCase() !== targetUser.email.toLowerCase());
+    const currentAssignments = (this.cache.roleAssignments || []).filter(a => (a.userEmail && targetUser.email) ? a.userEmail.toLowerCase() !== targetUser.email.toLowerCase() : true);
     this.cache.roleAssignments = [newAssignment, ...currentAssignments];
     this.saveCache(this.cache);
 
@@ -673,13 +1338,13 @@ class DataService {
 
     // Persist to Firestore
     try {
-      await setDoc(doc(db, 'users', targetUser.uid), targetUser);
+      await setDoc(doc(db, 'users', targetUser.uid), sanitizeForFirestore(targetUser));
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `users/${targetUser.uid}`);
     }
 
     try {
-      await setDoc(doc(db, 'role_assignments', assignmentId), newAssignment);
+      await setDoc(doc(db, 'role_assignments', assignmentId), sanitizeForFirestore(newAssignment));
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `role_assignments/${assignmentId}`);
     }
@@ -834,12 +1499,15 @@ class DataService {
   }
 
   public getClassByName(name: string): SchoolClass | undefined {
-    return this.cache.classes.find(c => c.name.toLowerCase() === name.toLowerCase());
+    if (!name) return undefined;
+    const clean = name.toLowerCase();
+    return this.cache.classes.find(c => (c.name || '').toLowerCase() === clean);
   }
 
   public async addClass(newClass: SchoolClass, adminName: string = 'Okul Yönetimi'): Promise<SchoolClass> {
     // Check if class with same name already exists
-    const existingIndex = this.cache.classes.findIndex(c => c.name.toLowerCase() === newClass.name.trim().toLowerCase());
+    const cleanName = (newClass.name || '').trim().toLowerCase();
+    const existingIndex = this.cache.classes.findIndex(c => (c.name || '').trim().toLowerCase() === cleanName);
     let updated: SchoolClass[];
     
     if (existingIndex >= 0) {
@@ -859,7 +1527,7 @@ class DataService {
     );
 
     try {
-      await setDoc(doc(db, 'classes', newClass.id), newClass);
+      await setDoc(doc(db, 'classes', newClass.id), sanitizeForFirestore(newClass));
     } catch (e) {
       console.log('Firebase add class write error:', e);
     }
@@ -979,7 +1647,7 @@ class DataService {
     );
 
     try {
-      await setDoc(doc(db, 'homeworks', homework.id), homework);
+      await setDoc(doc(db, 'homeworks', homework.id), sanitizeForFirestore(homework));
     } catch (e) {
       console.log('Firebase add homework sync:', e);
     }
@@ -1132,7 +1800,7 @@ class DataService {
     }
 
     try {
-      await setDoc(doc(db, 'homework_submissions', `sub-${homeworkId}-${studentId}`), {
+      await setDoc(doc(db, 'homework_submissions', `sub-${homeworkId}-${studentId}`), sanitizeForFirestore({
         homeworkId,
         studentId,
         status,
@@ -1140,7 +1808,7 @@ class DataService {
         teacherFeedback: feedback || null,
         rubricScores: rubricScores || null,
         updatedAt: new Date().toISOString()
-      }, { merge: true });
+      }), { merge: true });
     } catch (e) {
       console.log('Firebase submission update:', e);
     }
@@ -1220,7 +1888,7 @@ class DataService {
     }
 
     try {
-      await setDoc(doc(db, 'grades', grade.id), grade);
+      await setDoc(doc(db, 'grades', grade.id), sanitizeForFirestore(grade));
     } catch (e) {
       console.log('Firebase save grade error:', e);
     }
@@ -1264,7 +1932,7 @@ class DataService {
     this.saveCache({ ...this.cache, attendance: updated });
 
     try {
-      await setDoc(doc(db, 'attendance', record.id), record);
+      await setDoc(doc(db, 'attendance', record.id), sanitizeForFirestore(record));
     } catch (e) {
       console.log('Firebase attendance write:', e);
     }
@@ -1325,7 +1993,7 @@ class DataService {
     );
 
     try {
-      await setDoc(doc(db, 'announcements', announcement.id), announcement);
+      await setDoc(doc(db, 'announcements', announcement.id), sanitizeForFirestore(announcement));
     } catch (e) {
       console.log('Firebase announcement write:', e);
     }
@@ -1488,8 +2156,8 @@ class DataService {
     });
 
     try {
-      await setDoc(doc(db, 'student_badges', newStudentBadge.id), newStudentBadge);
-      await updateDoc(doc(db, 'users', studentId), { totalXp: newXp, level: newLevel });
+      await setDoc(doc(db, 'student_badges', newStudentBadge.id), sanitizeForFirestore(newStudentBadge));
+      await updateDoc(doc(db, 'users', studentId), sanitizeForFirestore({ totalXp: newXp, level: newLevel }));
     } catch (e) {
       console.log('Firebase badge award sync:', e);
     }
@@ -1625,15 +2293,15 @@ class DataService {
     });
 
     try {
-      await setDoc(doc(db, 'chat_messages', newMsg.id), newMsg);
-      await updateDoc(doc(db, 'conversations', msg.conversationId), {
+      await setDoc(doc(db, 'chat_messages', newMsg.id), sanitizeForFirestore(newMsg));
+      await updateDoc(doc(db, 'conversations', msg.conversationId), sanitizeForFirestore({
         lastMessage: {
           text: msg.text,
           senderName: msg.senderName,
           createdAt: newMsg.createdAt
         },
         updatedAt: newMsg.createdAt
-      });
+      }));
     } catch (e) {
       console.log('Firebase chat message error:', e);
     }
@@ -1665,7 +2333,7 @@ class DataService {
     this.saveCache({ ...this.cache, conversations: updated });
 
     try {
-      await setDoc(doc(db, 'conversations', newConv.id), newConv);
+      await setDoc(doc(db, 'conversations', newConv.id), sanitizeForFirestore(newConv));
     } catch (e) {
       console.log('Firebase new conversation write:', e);
     }
@@ -1693,7 +2361,7 @@ class DataService {
     this.saveCache({ ...this.cache, conversations: updated });
 
     try {
-      await setDoc(doc(db, 'conversations', newConv.id), newConv);
+      await setDoc(doc(db, 'conversations', newConv.id), sanitizeForFirestore(newConv));
     } catch (e) {
       console.log(e);
     }
@@ -1764,7 +2432,7 @@ class DataService {
     this.saveCache({ ...this.cache, systemLogs: updatedLogs });
 
     try {
-      setDoc(doc(db, 'system_logs', log.id), log);
+      setDoc(doc(db, 'system_logs', log.id), sanitizeForFirestore(log));
     } catch (e) {
       console.log(e);
     }
@@ -1800,8 +2468,9 @@ class DataService {
 
   public getSchedulesForClass(className: string): WeeklyScheduleSlot[] {
     if (!className) return [];
+    const target = className.trim().toLowerCase();
     return (this.cache.schedules || []).filter(
-      s => s.className.trim().toLowerCase() === className.trim().toLowerCase()
+      s => (s.className || '').trim().toLowerCase() === target
     );
   }
 
@@ -1826,8 +2495,9 @@ class DataService {
     };
 
     // If slot exists at same class, day, and period, replace it
+    const newClassClean = (newSlot.className || '').toLowerCase();
     const existingIdx = (this.cache.schedules || []).findIndex(
-      s => s.className.toLowerCase() === newSlot.className.toLowerCase() &&
+      s => (s.className || '').toLowerCase() === newClassClean &&
            s.day === newSlot.day &&
            s.period === newSlot.period
     );
@@ -1850,7 +2520,7 @@ class DataService {
     );
 
     try {
-      await setDoc(doc(db, 'schedules', newSlot.id), newSlot);
+      await setDoc(doc(db, 'schedules', newSlot.id), sanitizeForFirestore(newSlot));
     } catch (e) {
       console.log(e);
     }
@@ -1937,8 +2607,14 @@ class DataService {
     return result;
   }
 
-  // ================= SEED / RESET DATA =================
+  // ================= RESET PORTAL DATA =================
   public resetToFullDemoData(): void {
+    localStorage.removeItem(CACHE_STORAGE_KEY);
+    this.cache = this.loadInitialCache();
+    this.notifySubscribers();
+  }
+
+  public resetPortalData(): void {
     localStorage.removeItem(CACHE_STORAGE_KEY);
     this.cache = this.loadInitialCache();
     this.notifySubscribers();

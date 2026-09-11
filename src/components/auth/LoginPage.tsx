@@ -15,7 +15,9 @@ import {
   ArrowRight,
   Sparkles,
   Eye,
-  EyeOff
+  EyeOff,
+  Heart,
+  Users
 } from 'lucide-react';
 
 interface LoginPageProps {
@@ -25,10 +27,11 @@ interface LoginPageProps {
 export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
   const { 
     loginWithPhoneOrEmail, 
-    loginWithSchoolNumber
+    loginWithSchoolNumber,
+    loginParent
   } = useAuth();
 
-  const [loginMethod, setLoginMethod] = useState<'student_number' | 'staff'>('student_number');
+  const [loginMethod, setLoginMethod] = useState<'student_number' | 'parent' | 'staff'>('student_number');
 
   // Remember me / Oturumu Açık Tut state (Default: false, togglable)
   const [rememberMe, setRememberMe] = useState<boolean>(() => {
@@ -45,6 +48,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
   const [schoolNumber, setSchoolNumber] = useState('');
   const [studentPassword, setStudentPassword] = useState('');
   const [showStudentPassword, setShowStudentPassword] = useState(false);
+
+  // Parent inputs
+  const [parentIdentifier, setParentIdentifier] = useState('');
+  const [parentPassword, setParentPassword] = useState('');
+  const [showParentPassword, setShowParentPassword] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -71,6 +79,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
           throw new Error('Lütfen okul idareniz tarafından belirlenen öğrenci şifrenizi giriniz.');
         }
         await loginWithSchoolNumber(schoolNumber, studentPassword, rememberMe);
+      } else if (loginMethod === 'parent') {
+        if (!parentIdentifier.trim()) {
+          throw new Error('Lütfen öğrenci okul numaranızı veya veli telefon numaranızı giriniz.');
+        }
+        if (!parentPassword.trim()) {
+          throw new Error('Lütfen veli şifrenizi giriniz.');
+        }
+        await loginParent(parentIdentifier, parentPassword, rememberMe);
       } else {
         if (!phoneOrEmail.trim()) {
           throw new Error('Lütfen telefon numaranızı veya kurumsal e-posta adresinizi giriniz.');
@@ -134,34 +150,48 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
             )}
 
             <div>
-              {/* Method selector: Öğrenci No / Öğretmen & Yönetici */}
-              <div className="grid grid-cols-2 gap-2 p-1.5 bg-slate-100 dark:bg-slate-800/80 rounded-2xl mb-6">
+              {/* Method selector: Öğrenci No / Veli Girişi / Öğretmen & Yönetici */}
+              <div className="grid grid-cols-3 gap-1.5 p-1.5 bg-slate-100 dark:bg-slate-800/80 rounded-2xl mb-6">
                 <button
                   id="btn-login-method-schoolno"
                   type="button"
                   onClick={() => { setLoginMethod('student_number'); setError(null); }}
-                  className={`py-3 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition cursor-pointer ${
+                  className={`py-2.5 px-2 rounded-xl text-xs sm:text-sm font-bold flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 transition cursor-pointer ${
                     loginMethod === 'student_number'
                       ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
-                  <GraduationCap className="w-4 h-4 text-emerald-500" />
-                  <span>Öğrenci Girişi</span>
+                  <GraduationCap className="w-4 h-4 text-emerald-500 shrink-0" />
+                  <span className="truncate">Öğrenci</span>
+                </button>
+
+                <button
+                  id="btn-login-method-parent"
+                  type="button"
+                  onClick={() => { setLoginMethod('parent'); setError(null); }}
+                  className={`py-2.5 px-2 rounded-xl text-xs sm:text-sm font-bold flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 transition cursor-pointer ${
+                    loginMethod === 'parent'
+                      ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  <Heart className="w-4 h-4 text-rose-500 fill-rose-500 shrink-0" />
+                  <span className="truncate">Veli Portalı</span>
                 </button>
 
                 <button
                   id="btn-login-method-staff"
                   type="button"
                   onClick={() => { setLoginMethod('staff'); setError(null); }}
-                  className={`py-3 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition cursor-pointer ${
+                  className={`py-2.5 px-2 rounded-xl text-xs sm:text-sm font-bold flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 transition cursor-pointer ${
                     loginMethod === 'staff'
                       ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
-                  <Shield className="w-4 h-4 text-indigo-500" />
-                  <span>Öğretmen & Yönetici</span>
+                  <Shield className="w-4 h-4 text-indigo-500 shrink-0" />
+                  <span className="truncate">Öğretmen</span>
                 </button>
               </div>
 
@@ -219,6 +249,64 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
                       <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5 flex items-center gap-1.5">
                         <span className="text-amber-500">ℹ️</span>
                         <span>Şifrenizi bilmiyorsanız veya unuttuysanız lütfen okul yönetimine başvurunuz.</span>
+                      </p>
+                    </div>
+                  </div>
+                ) : loginMethod === 'parent' ? (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                        Öğrenci Okul No veya Veli Telefonu <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <Users className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-400" />
+                        <input
+                          id="login-parent-identifier-input"
+                          type="text"
+                          placeholder="Örn: 1042 veya 05551234567"
+                          value={parentIdentifier}
+                          onChange={(e) => setParentIdentifier(e.target.value)}
+                          required
+                          className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none transition shadow-2xs font-mono"
+                        />
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                        Öğrencinizin okul numarasını veya okula kayıtlı telefon numaranızı girebilirsiniz.
+                      </p>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                          Veli Giriş Şifresi <span className="text-rose-500">*</span>
+                        </label>
+                        <span className="text-[11px] text-rose-600 dark:text-rose-400 font-semibold flex items-center gap-1">
+                          <Heart className="w-3 h-3 fill-rose-500" />
+                          Veli Güvenliği
+                        </span>
+                      </div>
+                      <div className="relative">
+                        <Lock className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-400" />
+                        <input
+                          id="login-parent-password-input"
+                          type={showParentPassword ? 'text' : 'password'}
+                          placeholder="Okul tarafından verilen veli şifreniz"
+                          value={parentPassword}
+                          onChange={(e) => setParentPassword(e.target.value)}
+                          required
+                          className="w-full pl-10 pr-11 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none transition shadow-2xs font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowParentPassword(!showParentPassword)}
+                          className="absolute right-3 top-3 p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition cursor-pointer"
+                          title={showParentPassword ? 'Şifreyi Gizle' : 'Şifreyi Göster'}
+                        >
+                          {showParentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5">
+                        💡 Veliler yalnızca kendi çocuklarının ders notlarını, devamsızlıklarını ve ödevlerini görüntüleyebilir.
                       </p>
                     </div>
                   </div>

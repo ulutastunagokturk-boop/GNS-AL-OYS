@@ -123,8 +123,9 @@ export const ChatModule: React.FC = () => {
   // Filtered conversations
   const filteredConversations = conversations.filter(c => {
     if (!searchQuery) return true;
-    const matchName = c.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchLastMsg = c.lastMessage?.text.toLowerCase().includes(searchQuery.toLowerCase());
+    const q = searchQuery.toLowerCase();
+    const matchName = (c.name || '').toLowerCase().includes(q);
+    const matchLastMsg = (c.lastMessage?.text || '').toLowerCase().includes(q);
     return matchName || matchLastMsg;
   });
 

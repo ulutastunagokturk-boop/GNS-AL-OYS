@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'teacher' | 'student';
+export type UserRole = 'admin' | 'teacher' | 'student' | 'parent';
 export type UserStatus = 'active' | 'deactivated';
 
 export interface UserProfile {
@@ -18,6 +18,11 @@ export interface UserProfile {
   totalXp?: number;      // Öğrenci Başarı Puanı
   level?: number;        // Öğrenci Seviyesi (1-10)
   currentStreak?: number;// Günlük giriş serisi
+  studentIds?: string[]; // Velinin sorumlu olduğu öğrenci UID'leri (Sadece veliler için)
+  studentNumbers?: string[]; // Velinin sorumlu olduğu öğrenci okul numaraları
+  parentId?: string;     // Öğrencinin veli kullanıcı ID'si
+  parentName?: string;   // Veli Adı Soyadı
+  parentPhone?: string;  // Veli Telefon Numarası
   createdAt: string;
   updatedAt?: string;
 }
@@ -252,11 +257,33 @@ export interface RoleAssignment {
   classGrade?: string;
   branch?: string;
   schoolNumber?: string;
+  studentNumbers?: string[]; // Veli rolü için ilişkilendirilen öğrenci numaraları
   assignedBy: string;
   assignedAt: string;
   status: 'active' | 'pending' | 'revoked';
   notes?: string;
   permissions?: string[];
+}
+
+export interface ExcelStudentRow {
+  name: string;
+  schoolNumber: string;
+  classGrade: string;
+  password?: string;
+  parentName?: string;
+  parentPhone?: string;
+  parentEmail?: string;
+  parentPassword?: string;
+  notes?: string;
+  validationError?: string;
+}
+
+export interface ExcelImportSummary {
+  totalRows: number;
+  importedStudents: number;
+  createdParents: number;
+  skippedOrErrors: number;
+  errors: { row: number; reason: string }[];
 }
 
 export interface SystemAuditLog {
@@ -412,6 +439,62 @@ export interface GeneratedImageItem {
   model: string;
   seed?: number;
   createdAt: string;
+}
+
+// ================= SUPABASE CLOUD BACKUP =================
+export interface SupabaseBackupStats {
+  totalUsers: number;
+  totalClasses: number;
+  totalSchedules: number;
+  totalHomeworks: number;
+  totalAnnouncements: number;
+  totalGrades: number;
+  totalAttendance: number;
+}
+
+export interface SupabaseBackupRecord {
+  id: string;
+  backup_type: 'auto' | 'manual' | 'daily';
+  stats: SupabaseBackupStats;
+  created_at: string;
+  payload?: any;
+}
+
+export interface SupabaseTableCounts {
+  profiles: number;
+  classes: number;
+  assignments: number;
+  submissions: number;
+  grades: number;
+  attendance: number;
+  announcements: number;
+}
+
+export interface SupabaseBackupStatus {
+  configured: boolean;
+  url?: string;
+  maskedUrl?: string;
+  hasServiceRoleKey?: boolean;
+  hasAnonKey?: boolean;
+  lastBackupAt?: string | null;
+  lastBackupType?: 'auto' | 'manual';
+  totalBackupsCount?: number;
+  lastError?: string | null;
+  status: 'connected' | 'not_configured' | 'error' | 'pending';
+  tableName: string;
+  setupSql: string;
+  tableCounts?: SupabaseTableCounts;
+}
+
+export interface SupabaseSyncResponse {
+  success: boolean;
+  backupId?: string;
+  timestamp: string;
+  stats?: SupabaseBackupStats;
+  tableCounts?: SupabaseTableCounts;
+  message: string;
+  configured: boolean;
+  error?: string;
 }
 
 

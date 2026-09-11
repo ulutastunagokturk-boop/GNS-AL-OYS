@@ -55,7 +55,7 @@ export const StudentGrades: React.FC = () => {
 
   const filteredGrades = grades.filter(g => {
     const matchType = selectedExamType === 'all' || g.examType === selectedExamType;
-    const matchSubject = g.subject.toLowerCase().includes(searchSubject.toLowerCase());
+    const matchSubject = (g.subject || '').toLowerCase().includes((searchSubject || '').toLowerCase());
     return matchType && matchSubject;
   });
 

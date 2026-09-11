@@ -588,8 +588,9 @@ const HomeworkTrackingReportModal: React.FC<{
   };
 
   const filtered = submissions.filter(s => {
-    const matchSearch = s.studentName.toLowerCase().includes(searchFilter.toLowerCase()) || 
-                        s.studentNumber.includes(searchFilter);
+    const q = (searchFilter || '').toLowerCase();
+    const matchSearch = (s.studentName || '').toLowerCase().includes(q) || 
+                        (s.studentNumber || '').includes(searchFilter);
     const matchStatus = statusFilter === 'all' || s.status === statusFilter;
     return matchSearch && matchStatus;
   });

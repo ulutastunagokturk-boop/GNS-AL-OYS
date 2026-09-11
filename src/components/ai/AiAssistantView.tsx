@@ -868,9 +868,15 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({
               </button>
             </form>
 
-            <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
-              <span>Enter: Gönder • Shift + Enter: Yeni Satır</span>
-              <span>GNSİAL Yapay Zeka Danışmanı eğitim amaçlı rehberlik sunar.</span>
+            <div className="flex flex-col items-center gap-1.5 text-[11px] text-slate-400 px-1 pt-1">
+              <div className="flex items-center justify-between w-full text-[10px] text-slate-400">
+                <span>Enter: Gönder • Shift + Enter: Yeni Satır</span>
+                <span>GNSİAL Yapay Zeka Asistanı</span>
+              </div>
+              <p className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400 font-medium text-xs text-center">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                <span>Yapay zeka hata yapabilir.</span>
+              </p>
             </div>
           </div>
         </div>

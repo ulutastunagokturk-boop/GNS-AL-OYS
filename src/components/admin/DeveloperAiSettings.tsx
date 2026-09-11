@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { aiService } from '../../services/aiService';
+import { dataService } from '../../services/dataService';
 import { AiProviderConfig, AiDiagnosticTestResult } from '../../types';
 import { 
   Zap, 
@@ -17,7 +18,10 @@ import {
   Copy,
   Activity,
   Cpu,
-  Globe
+  Globe,
+  Database,
+  Wifi,
+  HardDrive
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -29,6 +33,61 @@ export const DeveloperAiSettings: React.FC = () => {
   const [testResult, setTestResult] = useState<AiDiagnosticTestResult | null>(null);
   const [isRunningTest, setIsRunningTest] = useState(false);
   const [copiedEnv, setCopiedEnv] = useState(false);
+
+  // Database diagnostic state
+  const [dbTestResult, setDbTestResult] = useState<{ success: boolean; latencyMs: number; userCount: number; message: string; error?: string } | null>(null);
+  const [isTestingDb, setIsTestingDb] = useState(false);
+  const [isSyncingDb, setIsSyncingDb] = useState(false);
+
+  const handleForceSync = async () => {
+    setIsSyncingDb(true);
+    try {
+      const res = await dataService.forceSyncAllWithFirestore();
+      setDbTestResult({
+        success: res.success,
+        latencyMs: 0,
+        userCount: res.syncedUsersCount,
+        message: res.message,
+        error: res.error
+      });
+      if (res.success) {
+        try {
+          confetti({ particleCount: 30, spread: 60 });
+        } catch {}
+      }
+    } catch (e: any) {
+      setDbTestResult({
+        success: false,
+        latencyMs: 0,
+        userCount: 0,
+        message: 'Eşitleme hatası: ' + (e.message || String(e))
+      });
+    } finally {
+      setIsSyncingDb(false);
+    }
+  };
+
+  const handleTestDatabase = async () => {
+    setIsTestingDb(true);
+    try {
+      const res = await dataService.testFirestoreConnection();
+      setDbTestResult(res);
+      if (res.success) {
+        try {
+          confetti({ particleCount: 25, spread: 50 });
+        } catch {}
+      }
+    } catch (e: any) {
+      setDbTestResult({
+        success: false,
+        latencyMs: 0,
+        userCount: 0,
+        message: 'Bağlantı testi başarısız: ' + (e.message || String(e))
+      });
+    } finally {
+      setIsTestingDb(false);
+    }
+  };
 
   const fetchConfig = async () => {
     setIsLoadingConfig(true);
@@ -498,6 +557,128 @@ GROQ_API_KEY=""`;
         <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400">
           <strong className="text-slate-900 dark:text-white block mb-1">Groq API Anahtarı Nasıl Alınır?</strong>
           <span><a href="https://console.groq.com" target="_blank" rel="noreferrer" className="text-indigo-600 dark:text-indigo-400 underline font-semibold">console.groq.com</a> adresine gidip ücretsiz hesap oluşturarak saniyeler içinde API Key alabilirsiniz. Aldığınız anahtarı Settings sekmesinden veya .env dosyasına <code className="text-slate-800 dark:text-slate-200 font-mono font-bold">GROQ_API_KEY</code> olarak eklemeniz yeterlidir.</span>
+        </div>
+      </div>
+
+      {/* Cloud Database Architecture & Status (Firebase Firestore) */}
+      <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-5">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center font-bold shadow-sm">
+              <Database className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-extrabold text-base text-slate-900 dark:text-white flex items-center gap-2">
+                Bulut Veritabanı & Kalıcı Bellek
+                <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 text-[10px] font-black border border-emerald-300 dark:border-emerald-800">
+                  FIRESTORE AKTİF
+                </span>
+              </h3>
+              <p className="text-xs text-slate-500">
+                GNSİAL sistemi Google Cloud Firestore kalıcı NoSQL veritabanı ve gerçek zamanlı (real-time) dinleyicilerle çalışır.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={handleForceSync}
+              disabled={isSyncingDb}
+              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-2 transition shadow-sm cursor-pointer disabled:opacity-50"
+            >
+              {isSyncingDb ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Bulut Eşitleniyor...</span>
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Tüm Verileri Buluta Eşitle (Senkronize Et)</span>
+                </>
+              )}
+            </button>
+
+            <button
+              onClick={handleTestDatabase}
+              disabled={isTestingDb}
+              className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold flex items-center gap-2 transition shadow-sm cursor-pointer disabled:opacity-50"
+            >
+              {isTestingDb ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Firestore Test Ediliyor...</span>
+                </>
+              ) : (
+                <>
+                  <Wifi className="w-3.5 h-3.5" />
+                  <span>Bağlantıyı Test Et</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Database Info Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+          <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800">
+            <span className="text-slate-400 font-medium block text-[11px] mb-1">Bulut Sağlayıcı</span>
+            <span className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+              <HardDrive className="w-4 h-4 text-amber-500" />
+              Google Cloud Firestore
+            </span>
+            <span className="text-[10px] text-slate-500 font-mono mt-1 block">studio-5738695585-af4f5</span>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800">
+            <span className="text-slate-400 font-medium block text-[11px] mb-1">Eşzamanlama Mimarisi</span>
+            <span className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+              <Activity className="w-4 h-4 text-indigo-500" />
+              Local-First + Realtime Sync
+            </span>
+            <span className="text-[10px] text-slate-500 mt-1 block">Anlık onSnapshot kanalları</span>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800">
+            <span className="text-slate-400 font-medium block text-[11px] mb-1">Koleksiyonlar</span>
+            <span className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+              <ShieldCheck className="w-4 h-4 text-emerald-500" />
+              Kullanıcılar, Sınıflar, Ödevler, Notlar
+            </span>
+            <span className="text-[10px] text-slate-500 mt-1 block">Tüm veriler kalıcı depolanır</span>
+          </div>
+        </div>
+
+        {/* Database Diagnostic Result */}
+        {dbTestResult && (
+          <div className={`p-4 rounded-2xl border ${
+            dbTestResult.success 
+              ? 'bg-emerald-50/80 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800' 
+              : 'bg-rose-50/80 dark:bg-rose-950/40 border-rose-300 dark:border-rose-800'
+          } text-xs space-y-1.5 animate-in fade-in`}>
+            <div className="flex items-center justify-between">
+              <span className={`font-bold flex items-center gap-1.5 ${dbTestResult.success ? 'text-emerald-800 dark:text-emerald-300' : 'text-rose-800 dark:text-rose-300'}`}>
+                {dbTestResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <AlertCircle className="w-4 h-4 text-rose-600" />}
+                {dbTestResult.message}
+              </span>
+              <span className="text-[11px] font-mono text-slate-500">
+                Gecikme: <strong>{dbTestResult.latencyMs} ms</strong>
+              </span>
+            </div>
+            {dbTestResult.error && (
+              <div className="p-2 rounded-lg bg-rose-100 dark:bg-rose-900/50 text-rose-800 dark:text-rose-200 font-mono text-[11px]">
+                {dbTestResult.error}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Note on Supabase / Cloud SQL */}
+        <div className="p-3.5 rounded-2xl bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 text-xs text-amber-900 dark:text-amber-200">
+          <strong>Supabase / İlişkisel Veritabanı Bilgilendirmesi:</strong>
+          <p className="mt-1 leading-relaxed text-[11px] text-amber-800 dark:text-amber-300">
+            Platform ortamında ilişkisel SQL (Cloud SQL / Supabase) kullanımı için aktif bir faturalandırılmış Google Cloud projesi gerekmektedir (şu an ortamda <code>NO_VALID_PROJECT</code> durumundadır). Bu nedenle sistem, Google Cloud altyapısında hazır ve aktif olan <strong>Firebase Firestore</strong> veritabanı üzerinde çalışmaya devam etmektedir. Tüm veriler (öğrenciler, öğretmenler, şubeler, ödevler, notlar, sohbetler ve ders programları) Firestore üzerinde güvenli ve kalıcı olarak senkronize edilmektedir.
+          </p>
         </div>
       </div>
 

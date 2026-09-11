@@ -6,6 +6,7 @@ import { AuthModal } from './components/auth/AuthModal';
 import { LoginPage } from './components/auth/LoginPage';
 import { TeacherDashboard } from './components/teacher/TeacherDashboard';
 import { StudentDashboard } from './components/student/StudentDashboard';
+import { ParentDashboard } from './components/parent/ParentDashboard';
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { ChatModule } from './components/chat/ChatModule';
 import { AchievementsView } from './components/achievements/AchievementsView';
@@ -163,6 +164,12 @@ const MainContent: React.FC = () => {
                         onTabChange={(tab) => setActiveTab(tab)} 
                       />
                     )
+                  )}
+                  {currentUser.role === 'parent' && (
+                    <ParentDashboard 
+                      activeTab={activeTab} 
+                      onTabChange={(tab) => setActiveTab(tab)} 
+                    />
                   )}
                   {currentUser.role === 'admin' && (
                     <AdminDashboard 

@@ -58,11 +58,12 @@ export const StudentAnnouncements: React.FC = () => {
   }, [studentAnnouncements.length, currentUser?.uid]);
 
   const filtered = studentAnnouncements.filter(a => {
+    const q = search.toLowerCase();
     const matchSearch = 
-      a.title.toLowerCase().includes(search.toLowerCase()) || 
-      a.content.toLowerCase().includes(search.toLowerCase()) ||
-      a.authorName.toLowerCase().includes(search.toLowerCase()) ||
-      (a.tags && a.tags.some(t => t.toLowerCase().includes(search.toLowerCase())));
+      (a.title || '').toLowerCase().includes(q) || 
+      (a.content || '').toLowerCase().includes(q) ||
+      (a.authorName || '').toLowerCase().includes(q) ||
+      (a.tags && a.tags.some(t => (t || '').toLowerCase().includes(q)));
     const matchPriority = priorityFilter === 'all' || a.priority === priorityFilter;
     return matchSearch && matchPriority;
   });
