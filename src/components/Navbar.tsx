@@ -11,7 +11,8 @@ import {
   Menu,
   School,
   LogIn,
-  UserPlus
+  UserPlus,
+  Users
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { NotificationItem } from '../types';
@@ -65,6 +66,13 @@ export const Navbar: React.FC<NavbarProps> = ({
             Okul Yönetimi
           </span>
         );
+      case 'parent':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800/80 shadow-xs">
+            <Users className="w-3.5 h-3.5" />
+            Veli Portalı {currentUser.studentNumbers?.length ? `(${currentUser.studentNumbers.length} Öğrenci)` : ''}
+          </span>
+        );
     }
   };
 
@@ -107,7 +115,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             ) : (
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-slate-400 hidden sm:inline">
-                  {currentUser.role === 'teacher' ? 'Öğretmen Portalı' : currentUser.role === 'student' ? 'Öğrenci Portalı' : 'Yönetim Portalı'}
+                  {currentUser.role === 'teacher' ? 'Öğretmen Portalı' : currentUser.role === 'student' ? 'Öğrenci Portalı' : currentUser.role === 'parent' ? 'Veli Portalı' : 'Yönetim Portalı'}
                 </span>
                 {currentSectionTitle && (
                   <>

@@ -38,7 +38,9 @@ import {
   WeeklyScheduleSlot,
   DayOfWeek,
   ExcelStudentRow,
-  ExcelImportSummary
+  ExcelImportSummary,
+  ExcelParentRow,
+  ExcelParentImportSummary
 } from '../types';
 import { 
   INITIAL_CLASSES, 
@@ -1251,6 +1253,424 @@ class DataService {
     };
   }
 
+  /**
+   * Retrieves all parent accounts
+   */
+  public getParents(): UserProfile[] {
+    return this.cache.users.filter(u => u.role === 'parent');
+  }
+
+  /**
+   * Bulk imports parent list from any Excel spreadsheet (.xlsx, .xls, .csv, .ods, .tsv)
+   * Links parent accounts to one or more students using student school numbers or names.
+   */
+  public async bulkImportParentsFromExcel(
+    rows: ExcelParentRow[], 
+    adminName: string = 'Sistem Yöneticisi'
+  ): Promise<ExcelParentImportSummary> {
+    let createdParents = 0;
+    let updatedParents = 0;
+    let linkedStudentsCount = 0;
+    let skippedOrErrors = 0;
+    const errors: { row: number; reason: string }[] = [];
+
+    const updatedUsers = [...this.cache.users];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowIdx = i + 1;
+      const cleanParentName = row.parentName?.trim();
+      const cleanPhone = row.parentPhone ? String(row.parentPhone).trim().replace(/\s+/g, '') : '';
+      const cleanEmail = row.parentEmail ? String(row.parentEmail).trim().toLowerCase() : '';
+      const rawStudentNos = row.studentNumbers ? String(row.studentNumbers).trim() : '';
+      const rawStudentName = row.studentName ? String(row.studentName).trim() : '';
+
+      if (!cleanParentName && !cleanPhone && !cleanEmail) {
+        skippedOrErrors++;
+        errors.push({ row: rowIdx, reason: 'Veli adı, telefonu veya e-postası belirtilmemiş.' });
+        continue;
+      }
+
+      // Parse student school numbers (comma, semicolon, slash or space separated: e.g. "1042, 1045" or "1042")
+      const parsedNos = rawStudentNos
+        ? rawStudentNos.split(/[,;\/\s]+/).map(s => s.trim().replace(/^#/, '')).filter(Boolean)
+        : [];
+
+      // Find matching students
+      const matchedStudents: UserProfile[] = [];
+      for (const no of parsedNos) {
+        const found = updatedUsers.find(u => u.role === 'student' && u.schoolNumber === no);
+        if (found && !matchedStudents.some(m => m.uid === found.uid)) {
+          matchedStudents.push(found);
+        }
+      }
+
+      // If no school number matched or provided, try matching by student name
+      if (matchedStudents.length === 0 && rawStudentName) {
+        const lowerStudentName = rawStudentName.toLowerCase();
+        const foundByName = updatedUsers.filter(u => 
+          u.role === 'student' && 
+          (u.displayName.toLowerCase().includes(lowerStudentName) || lowerStudentName.includes(u.displayName.toLowerCase()))
+        );
+        foundByName.forEach(f => {
+          if (!matchedStudents.some(m => m.uid === f.uid)) {
+            matchedStudents.push(f);
+          }
+        });
+      }
+
+      // Determine parent password
+      const cleanDigits = cleanPhone.replace(/\D/g, '');
+      const lastDigits = cleanDigits.length >= 4 ? cleanDigits.slice(-4) : (parsedNos[0] || '1234');
+      const defaultPassword = `veli${lastDigits}`;
+      const parentPass = row.parentPassword?.trim() || defaultPassword;
+
+      // Check if parent already exists (by phone digits or email)
+      const existingParentIdx = updatedUsers.findIndex(u =>
+        u.role === 'parent' && (
+          (cleanDigits && cleanDigits.length >= 7 && u.phone && u.phone.replace(/\D/g, '') === cleanDigits) ||
+          (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail)
+        )
+      );
+
+      let targetParentUid = '';
+      const newStudentIds = matchedStudents.map(s => s.uid);
+      const newStudentNumbers = Array.from(new Set([
+        ...matchedStudents.map(s => s.schoolNumber || '').filter(Boolean),
+        ...parsedNos
+      ]));
+
+      if (existingParentIdx >= 0) {
+        const existingParent = updatedUsers[existingParentIdx];
+        const mergedStudentIds = Array.from(new Set([...(existingParent.studentIds || []), ...newStudentIds]));
+        const mergedStudentNumbers = Array.from(new Set([...(existingParent.studentNumbers || []), ...newStudentNumbers]));
+
+        updatedUsers[existingParentIdx] = {
+          ...existingParent,
+          displayName: cleanParentName || existingParent.displayName,
+          phone: cleanPhone || existingParent.phone,
+          email: cleanEmail || existingParent.email,
+          password: row.parentPassword?.trim() || existingParent.password || parentPass,
+          studentIds: mergedStudentIds,
+          studentNumbers: mergedStudentNumbers,
+          updatedAt: new Date().toISOString()
+        };
+        targetParentUid = existingParent.uid;
+        updatedParents++;
+      } else {
+        targetParentUid = `parent-${cleanDigits || Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+        const autoEmail = cleanEmail || (cleanDigits ? `veli.${cleanDigits.slice(-7)}@gnsial.meb.k12.tr` : `veli.${targetParentUid}@gnsial.meb.k12.tr`);
+        
+        const newParent: UserProfile = {
+          uid: targetParentUid,
+          displayName: cleanParentName || 'Öğrenci Velisi',
+          email: autoEmail,
+          phone: cleanPhone || '',
+          role: 'parent',
+          password: parentPass,
+          status: 'active',
+          studentIds: newStudentIds,
+          studentNumbers: newStudentNumbers,
+          createdAt: new Date().toISOString()
+        };
+        updatedUsers.push(newParent);
+        createdParents++;
+      }
+
+      // Link matched students to this parent
+      for (const st of matchedStudents) {
+        const stIdx = updatedUsers.findIndex(u => u.uid === st.uid);
+        if (stIdx >= 0) {
+          updatedUsers[stIdx] = {
+            ...updatedUsers[stIdx],
+            parentId: targetParentUid,
+            parentName: cleanParentName || (existingParentIdx >= 0 ? updatedUsers[existingParentIdx].displayName : 'Veli'),
+            parentPhone: cleanPhone || (existingParentIdx >= 0 ? updatedUsers[existingParentIdx].phone : ''),
+            updatedAt: new Date().toISOString()
+          };
+          linkedStudentsCount++;
+        }
+      }
+    }
+
+    this.cache.users = updatedUsers;
+    this.saveCache(this.cache);
+    this.notifySubscribers();
+
+    this.logSystemAction(
+      'Excel ile Toplu Veli Hesabı Oluşturuldu',
+      adminName,
+      'admin',
+      'Toplu Veli İçe Aktarma',
+      `${rows.length} satırlık Excel dosyasından ${createdParents} yeni veli hesabı açıldı, ${updatedParents} veli güncellendi, ${linkedStudentsCount} öğrenci ile bağlandı.`
+    );
+
+    // Sync to Supabase & Firestore
+    this.triggerSupabaseBackup('auto').catch(() => {});
+
+    return {
+      totalRows: rows.length,
+      createdParents,
+      updatedParents,
+      linkedStudentsCount,
+      skippedOrErrors,
+      errors
+    };
+  }
+
+  /**
+   * Manually creates or updates a single parent account and links students
+   */
+  public async createParentAccount(data: {
+    displayName?: string;
+    parentName?: string;
+    phone?: string;
+    parentPhone?: string;
+    email?: string;
+    parentEmail?: string;
+    password?: string;
+    parentPassword?: string;
+    studentNumbers?: string[];
+    studentIds?: string[];
+    assignedBy?: string;
+    createdBy?: string;
+    notes?: string;
+    permissions?: string[];
+    relationship?: string;
+  }): Promise<{ parent: UserProfile; linkedStudents: UserProfile[]; linkedStudentsCount: number }> {
+    const rawPhone = data.phone || data.parentPhone || '';
+    const cleanDigits = rawPhone.replace(/\D/g, '');
+    const cleanEmail = (data.email || data.parentEmail || '').trim().toLowerCase();
+    const cleanName = (data.displayName || data.parentName || 'Öğrenci Velisi').trim();
+    const cleanPassword = (data.password || data.parentPassword || '').trim() || `veli${cleanDigits.slice(-4) || '1234'}`;
+
+    // Find if parent exists
+    const existingIndex = this.cache.users.findIndex(u =>
+      u.role === 'parent' && (
+        (cleanDigits && cleanDigits.length >= 7 && u.phone && u.phone.replace(/\D/g, '') === cleanDigits) ||
+        (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail)
+      )
+    );
+
+    let parentUid: string;
+    let targetParent: UserProfile;
+
+    const reqStudentIds = data.studentIds || [];
+    const reqStudentNos = data.studentNumbers || [];
+
+    const matchedStudents = this.cache.users.filter(u =>
+      u.role === 'student' && (
+        reqStudentIds.includes(u.uid) ||
+        (u.schoolNumber && reqStudentNos.includes(u.schoolNumber))
+      )
+    );
+
+    const finalStudentIds = Array.from(new Set([...matchedStudents.map(s => s.uid), ...reqStudentIds]));
+    const finalStudentNumbers = Array.from(new Set([...matchedStudents.map(s => s.schoolNumber || '').filter(Boolean), ...reqStudentNos]));
+
+    if (existingIndex >= 0) {
+      const existing = this.cache.users[existingIndex];
+      parentUid = existing.uid;
+      targetParent = {
+        ...existing,
+        displayName: cleanName || existing.displayName,
+        phone: data.phone.trim() || existing.phone,
+        email: cleanEmail || existing.email,
+        password: cleanPassword || existing.password,
+        relationship: data.relationship || existing.relationship || 'Veli',
+        studentIds: Array.from(new Set([...(existing.studentIds || []), ...finalStudentIds])),
+        studentNumbers: Array.from(new Set([...(existing.studentNumbers || []), ...finalStudentNumbers])),
+        status: 'active',
+        updatedAt: new Date().toISOString()
+      };
+      this.cache.users[existingIndex] = targetParent;
+    } else {
+      parentUid = `parent-${cleanDigits || Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+      const autoEmail = cleanEmail || (cleanDigits ? `veli.${cleanDigits.slice(-7)}@gnsial.meb.k12.tr` : `veli.${Date.now()}@gnsial.meb.k12.tr`);
+      targetParent = {
+        uid: parentUid,
+        displayName: cleanName,
+        phone: rawPhone.trim(),
+        email: autoEmail,
+        role: 'parent',
+        password: cleanPassword,
+        relationship: data.relationship || 'Veli',
+        status: 'active',
+        studentIds: finalStudentIds,
+        studentNumbers: finalStudentNumbers,
+        createdAt: new Date().toISOString()
+      };
+      this.cache.users = [targetParent, ...this.cache.users];
+    }
+
+    // Update students to link to this parent
+    this.cache.users = this.cache.users.map(u => {
+      if (u.role === 'student' && (finalStudentIds.includes(u.uid) || (u.schoolNumber && finalStudentNumbers.includes(u.schoolNumber)))) {
+        return {
+          ...u,
+          parentId: parentUid,
+          parentName: targetParent.displayName,
+          parentPhone: targetParent.phone,
+          updatedAt: new Date().toISOString()
+        };
+      }
+      return u;
+    });
+
+    // Create role assignment
+    const newAssignment: RoleAssignment = {
+      id: `assign-${Date.now()}`,
+      userEmail: targetParent.email,
+      userName: targetParent.displayName,
+      assignedRole: 'parent',
+      studentNumbers: finalStudentNumbers,
+      assignedBy: data.assignedBy,
+      assignedAt: new Date().toISOString(),
+      status: 'active',
+      notes: data.notes || `Yönetici (${data.assignedBy}) tarafından Veli hesabı oluşturuldu ve öğrenci(ler) ile eşleştirildi.`,
+      permissions: data.permissions || [
+        'Öğrenci Not ve Karne Takibi',
+        'Günlük Devamsızlık ve İzin Bilgisi',
+        'Ödev, Proje ve Teslim Durumu',
+        'Okul & Sınıf Duyuruları',
+        'Öğretmenle Doğrudan İletişim / Mesajlaşma'
+      ]
+    };
+
+    this.cache.roleAssignments = [
+      newAssignment,
+      ...(this.cache.roleAssignments || []).filter(a => a.userEmail?.toLowerCase() !== targetParent.email.toLowerCase())
+    ];
+
+    this.saveCache(this.cache);
+    this.notifySubscribers();
+
+    this.logSystemAction(
+      'Veli Hesabı Tanımlandı & Yetkilendirildi',
+      data.assignedBy,
+      'admin',
+      targetParent.displayName,
+      `${targetParent.displayName} (${targetParent.phone}) için Veli hesabı açıldı. Bağlı Öğrenciler: ${finalStudentNumbers.join(', ') || 'Yok'}.`
+    );
+
+    // Sync to Supabase
+    this.triggerSupabaseBackup('auto').catch(() => {});
+
+    // Save to Firestore
+    try {
+      await setDoc(doc(db, 'users', targetParent.uid), sanitizeForFirestore(targetParent));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `users/${targetParent.uid}`);
+    }
+
+    return {
+      parent: targetParent,
+      linkedStudents: matchedStudents,
+      linkedStudentsCount: matchedStudents.length
+    };
+  }
+
+  /**
+   * Links an existing student to an existing parent account
+   */
+  public async linkStudentToParent(parentUid: string, studentNumberOrUid: string, adminName: string): Promise<boolean> {
+    const parent = this.cache.users.find(u => u.uid === parentUid);
+    if (!parent) return false;
+
+    const student = this.cache.users.find(u => 
+      u.role === 'student' && (u.uid === studentNumberOrUid || u.schoolNumber === studentNumberOrUid)
+    );
+    if (!student) return false;
+
+    const studentNos = Array.from(new Set([...(parent.studentNumbers || []), student.schoolNumber || ''])).filter(Boolean);
+    const studentIds = Array.from(new Set([...(parent.studentIds || []), student.uid]));
+
+    this.cache.users = this.cache.users.map(u => {
+      if (u.uid === parent.uid) {
+        return {
+          ...u,
+          studentNumbers: studentNos,
+          studentIds: studentIds,
+          updatedAt: new Date().toISOString()
+        };
+      }
+      if (u.uid === student.uid) {
+        return {
+          ...u,
+          parentId: parent.uid,
+          parentName: parent.displayName,
+          parentPhone: parent.phone,
+          updatedAt: new Date().toISOString()
+        };
+      }
+      return u;
+    });
+
+    this.saveCache(this.cache);
+    this.notifySubscribers();
+
+    this.logSystemAction(
+      'Veli-Öğrenci Eşleştirmesi Yapıldı',
+      adminName,
+      'admin',
+      'Veli Eşleştirme',
+      `"${parent.displayName}" velisi, #${student.schoolNumber} "${student.displayName}" isimli öğrenci ile eşleştirildi.`
+    );
+
+    this.triggerSupabaseBackup('auto').catch(() => {});
+    return true;
+  }
+
+  /**
+   * Unlinks a student from a parent account
+   */
+  public async unlinkStudentFromParent(parentUid: string, studentNumberOrUid: string, adminName: string): Promise<boolean> {
+    const parent = this.cache.users.find(u => u.uid === parentUid);
+    if (!parent) return false;
+
+    const student = this.cache.users.find(u => 
+      u.role === 'student' && (u.uid === studentNumberOrUid || u.schoolNumber === studentNumberOrUid)
+    );
+
+    const studentNos = (parent.studentNumbers || []).filter(n => n !== studentNumberOrUid && (student ? n !== student.schoolNumber : true));
+    const studentIds = (parent.studentIds || []).filter(id => id !== studentNumberOrUid && (student ? id !== student.uid : true));
+
+    this.cache.users = this.cache.users.map(u => {
+      if (u.uid === parent.uid) {
+        return {
+          ...u,
+          studentNumbers: studentNos,
+          studentIds: studentIds,
+          updatedAt: new Date().toISOString()
+        };
+      }
+      if (student && u.uid === student.uid && u.parentId === parent.uid) {
+        return {
+          ...u,
+          parentId: undefined,
+          parentName: undefined,
+          parentPhone: undefined,
+          updatedAt: new Date().toISOString()
+        };
+      }
+      return u;
+    });
+
+    this.saveCache(this.cache);
+    this.notifySubscribers();
+
+    this.logSystemAction(
+      'Veli-Öğrenci Eşleştirmesi Kaldırıldı',
+      adminName,
+      'admin',
+      'Veli Eşleştirme',
+      `"${parent.displayName}" velisinden öğrenci (#${studentNumberOrUid}) eşleştirmesi kaldırıldı.`
+    );
+
+    this.triggerSupabaseBackup('auto').catch(() => {});
+    return true;
+  }
+
   public async assignUserRole(data: {
     userEmail: string;
     userName: string;
@@ -1258,6 +1678,8 @@ class DataService {
     classGrade?: string;
     branch?: string;
     schoolNumber?: string;
+    studentNumbers?: string[];
+    studentIds?: string[];
     password?: string;
     phone?: string;
     notes?: string;
@@ -1284,6 +1706,8 @@ class DataService {
         schoolNumber: data.assignedRole === 'student' ? (data.schoolNumber || existingUser.schoolNumber) : undefined,
         password: determinedPassword,
         phone: data.phone?.trim() || existingUser.phone,
+        studentIds: data.assignedRole === 'parent' ? (data.studentIds || existingUser.studentIds) : existingUser.studentIds,
+        studentNumbers: data.assignedRole === 'parent' ? (data.studentNumbers || existingUser.studentNumbers) : existingUser.studentNumbers,
         status: 'active',
         updatedAt: new Date().toISOString()
       };
@@ -1298,6 +1722,8 @@ class DataService {
         classGrade: data.assignedRole === 'student' ? data.classGrade : undefined,
         branch: data.assignedRole === 'teacher' ? data.branch : undefined,
         schoolNumber: data.assignedRole === 'student' ? (data.schoolNumber || `${Math.floor(1000 + Math.random() * 9000)}`) : undefined,
+        studentIds: data.assignedRole === 'parent' ? (data.studentIds || []) : undefined,
+        studentNumbers: data.assignedRole === 'parent' ? (data.studentNumbers || []) : undefined,
         password: determinedPassword,
         phone: data.phone?.trim(),
         status: 'active',
@@ -1306,6 +1732,23 @@ class DataService {
         createdAt: new Date().toISOString()
       };
       this.cache.users = [targetUser, ...this.cache.users];
+    }
+
+    if (data.assignedRole === 'parent' && (targetUser.studentIds?.length || targetUser.studentNumbers?.length)) {
+      const sIds = targetUser.studentIds || [];
+      const sNos = targetUser.studentNumbers || [];
+      this.cache.users = this.cache.users.map(u => {
+        if (u.role === 'student' && (sIds.includes(u.uid) || (u.schoolNumber && sNos.includes(u.schoolNumber)))) {
+          return {
+            ...u,
+            parentId: targetUser.uid,
+            parentName: targetUser.displayName,
+            parentPhone: targetUser.phone,
+            updatedAt: new Date().toISOString()
+          };
+        }
+        return u;
+      });
     }
 
     const assignmentId = `assign-${Date.now()}`;

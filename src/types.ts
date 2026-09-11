@@ -20,6 +20,7 @@ export interface UserProfile {
   currentStreak?: number;// Günlük giriş serisi
   studentIds?: string[]; // Velinin sorumlu olduğu öğrenci UID'leri (Sadece veliler için)
   studentNumbers?: string[]; // Velinin sorumlu olduğu öğrenci okul numaraları
+  relationship?: string; // Anne, Baba, Vasi vb.
   parentId?: string;     // Öğrencinin veli kullanıcı ID'si
   parentName?: string;   // Veli Adı Soyadı
   parentPhone?: string;  // Veli Telefon Numarası
@@ -282,6 +283,33 @@ export interface ExcelImportSummary {
   totalRows: number;
   importedStudents: number;
   createdParents: number;
+  skippedOrErrors: number;
+  errors: { row: number; reason: string }[];
+}
+
+export interface ExcelParentRow {
+  parentName: string;
+  parentPhone: string;
+  parentEmail?: string;
+  parentPassword?: string;
+  studentNumbers?: string; // Single or comma-separated: e.g. "1042" or "1042, 1045"
+  studentName?: string;
+  relationship?: string; // 'Anne' | 'Baba' | 'Vasi'
+  notes?: string;
+  validationError?: string;
+  matchedStudentDetails?: {
+    uid: string;
+    displayName: string;
+    schoolNumber: string;
+    classGrade?: string;
+  }[];
+}
+
+export interface ExcelParentImportSummary {
+  totalRows: number;
+  createdParents: number;
+  updatedParents: number;
+  linkedStudentsCount: number;
   skippedOrErrors: number;
   errors: { row: number; reason: string }[];
 }

@@ -102,98 +102,108 @@ export const ExcelStudentImportModal: React.FC<ExcelStudentImportModalProps> = (
     }
   };
 
-  const processSelectedFile = (file: File) => {
+  const processSelectedFile = async (file: File) => {
     setIsProcessingFile(true);
     setErrorMsg(null);
     setFileName(file.name);
     setImportSummary(null);
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const buffer = event.target?.result;
-        const workbook = XLSX.read(buffer, { type: 'binary' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
+    try {
+      const buffer = await file.arrayBuffer();
+      const data = new Uint8Array(buffer);
+      const workbook = XLSX.read(data, { 
+        type: 'array',
+        codepage: 65001 // UTF-8
+      });
+
+      if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+        throw new Error('Yüklenen tabloda herhangi bir sayfa bulunamadı.');
+      }
+
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      
+      // Convert sheet to JSON array
+      const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+
+      if (!rawRows || rawRows.length === 0) {
+        throw new Error('Yüklenen Excel dosyasında hiç veri bulunamadı.');
+      }
+
+      // Map columns dynamically by matching keywords
+      const normalizedRows: ExcelStudentRow[] = rawRows.map((r, idx) => {
+        const keys = Object.keys(r);
         
-        // Convert sheet to JSON array
-        const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+        // Match helper
+        const findVal = (keywords: string[]) => {
+          for (const key of keys) {
+            const lowerKey = key.trim().toLowerCase()
+              .replace(/[\s_\-\.\/\(\)]/g, '')
+              .replace(/ı/g, 'i')
+              .replace(/ğ/g, 'g')
+              .replace(/ü/g, 'u')
+              .replace(/ş/g, 's')
+              .replace(/ö/g, 'o')
+              .replace(/ç/g, 'c');
 
-        if (!rawRows || rawRows.length === 0) {
-          throw new Error('Yüklenen Excel dosyasında hiç veri bulunamadı.');
-        }
-
-        // Map columns dynamically by matching keywords
-        const normalizedRows: ExcelStudentRow[] = rawRows.map((r, idx) => {
-          const keys = Object.keys(r);
-          
-          // Match helper
-          const findVal = (keywords: string[]) => {
-            for (const key of keys) {
-              const lowerKey = key.trim().toLowerCase().replace(/[^a-z0-9ğüşıöç]/g, '');
-              if (keywords.some(kw => lowerKey.includes(kw))) {
-                return String(r[key]).trim();
+            if (keywords.some(kw => lowerKey.includes(kw))) {
+              const val = r[key];
+              if (val !== undefined && val !== null) {
+                return String(val).trim();
               }
             }
-            return '';
-          };
-
-          const name = findVal(['adsoyad', 'ogrenciadi', 'adisoyadi', 'ad', 'isim']);
-          const schoolNumber = findVal(['okulno', 'ogrencino', 'numara', 'no']);
-          const classGrade = findVal(['sinifsube', 'sinif', 'sube', 'grade']);
-          const password = findVal(['ogrencisifre', 'sifre', 'parola']);
-          const parentName = findVal(['veliadi', 'velisoyadi', 'veli', 'annebaba']);
-          const parentPhone = findVal(['velitelefon', 'velitel', 'telefon', 'tel']);
-          const parentEmail = findVal(['velieposta', 'velimail', 'eposta', 'email']);
-          const parentPassword = findVal(['velisifre', 'veliparola']);
-
-          let validationError: string | undefined = undefined;
-          if (!name) validationError = 'Öğrenci Adı Soyadı eksik.';
-          else if (!schoolNumber) validationError = 'Okul No eksik.';
-          else if (!classGrade) validationError = 'Sınıf/Şube (Örn: 9-A) eksik.';
-
-          return {
-            name,
-            schoolNumber,
-            classGrade: classGrade.toUpperCase(),
-            password: password || undefined,
-            parentName: parentName || undefined,
-            parentPhone: parentPhone || undefined,
-            parentEmail: parentEmail || undefined,
-            parentPassword: parentPassword || undefined,
-            validationError
-          };
-        });
-
-        // Check for duplicates in uploaded sheet
-        const schoolNumberCount: Record<string, number> = {};
-        normalizedRows.forEach(r => {
-          if (r.schoolNumber) {
-            schoolNumberCount[r.schoolNumber] = (schoolNumberCount[r.schoolNumber] || 0) + 1;
           }
-        });
+          return '';
+        };
 
-        normalizedRows.forEach(r => {
-          if (r.schoolNumber && schoolNumberCount[r.schoolNumber] > 1) {
-            r.validationError = `Mükerrer Okul No: '${r.schoolNumber}' tabloda birden çok kez geçiyor.`;
-          }
-        });
+        const name = findVal(['adsoyad', 'ogrenciadi', 'adisoyadi', 'ad', 'isim', 'ogrenci']);
+        const schoolNumber = findVal(['okulno', 'ogrencino', 'numara', 'no', 'studentno']);
+        const classGrade = findVal(['sinifsube', 'sinif', 'sube', 'grade', 'seviye']);
+        const password = findVal(['ogrencisifre', 'sifre', 'parola', 'password']);
+        const parentName = findVal(['veliadi', 'velisoyadi', 'veli', 'annebaba', 'parent']);
+        const parentPhone = findVal(['velitelefon', 'velitel', 'telefon', 'tel', 'phone', 'gsm']);
+        const parentEmail = findVal(['velieposta', 'velimail', 'eposta', 'email', 'mail']);
+        const parentPassword = findVal(['velisifre', 'veliparola']);
 
-        setParsedRows(normalizedRows);
-      } catch (err: any) {
-        setErrorMsg(err.message || 'Excel dosyası okunurken hata oluştu.');
-        setParsedRows([]);
-      } finally {
-        setIsProcessingFile(false);
-      }
-    };
+        let validationError: string | undefined = undefined;
+        if (!name) validationError = 'Öğrenci Adı Soyadı eksik.';
+        else if (!schoolNumber) validationError = 'Okul No eksik.';
+        else if (!classGrade) validationError = 'Sınıf/Şube (Örn: 9-A) eksik.';
 
-    reader.onerror = () => {
-      setErrorMsg('Dosya okunamadı. Lütfen geçerli bir .xlsx veya .csv dosyası yükleyin.');
+        return {
+          name,
+          schoolNumber,
+          classGrade: classGrade.toUpperCase(),
+          password: password || undefined,
+          parentName: parentName || undefined,
+          parentPhone: parentPhone || undefined,
+          parentEmail: parentEmail || undefined,
+          parentPassword: parentPassword || undefined,
+          validationError
+        };
+      });
+
+      // Check for duplicates in uploaded sheet
+      const schoolNumberCount: Record<string, number> = {};
+      normalizedRows.forEach(r => {
+        if (r.schoolNumber) {
+          schoolNumberCount[r.schoolNumber] = (schoolNumberCount[r.schoolNumber] || 0) + 1;
+        }
+      });
+
+      normalizedRows.forEach(r => {
+        if (r.schoolNumber && schoolNumberCount[r.schoolNumber] > 1) {
+          r.validationError = `Mükerrer Okul No: '${r.schoolNumber}' tabloda birden çok kez geçiyor.`;
+        }
+      });
+
+      setParsedRows(normalizedRows);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Tablo dosyası okunurken hata oluştu. Lütfen dosya formatını kontrol edin.');
+      setParsedRows([]);
+    } finally {
       setIsProcessingFile(false);
-    };
-
-    reader.readAsBinaryString(file);
+    }
   };
 
   const handleDragOver = (e: React.DragEvent) => {

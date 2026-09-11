@@ -42,9 +42,10 @@ import {
 import confetti from 'canvas-confetti';
 import { StudentPasswordToolModal } from './StudentPasswordToolModal';
 import { ExcelStudentImportModal } from './ExcelStudentImportModal';
+import { ExcelParentImportModal } from './ExcelParentImportModal';
 import { generateUniqueStudentPassword, PasswordStyle } from '../../utils/passwordGenerator';
 
-export type AdminTab = 'overview' | 'users' | 'roles' | 'classes' | 'schedule' | 'backup';
+export type AdminTab = 'overview' | 'users' | 'parents' | 'roles' | 'classes' | 'schedule' | 'backup';
 
 interface AdminDashboardProps {
   activeTab?: string;
@@ -68,10 +69,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [searchUser, setSearchUser] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
   const [classFilter, setClassFilter] = useState<string>('all');
+  const [parentSearch, setParentSearch] = useState('');
 
   // Dedicated Student Password Tool Modal State
   const [isPasswordToolOpen, setIsPasswordToolOpen] = useState(false);
   const [isExcelImportOpen, setIsExcelImportOpen] = useState(false);
+  const [isExcelParentImportOpen, setIsExcelParentImportOpen] = useState(false);
   const [visibleTablePasswordUid, setVisibleTablePasswordUid] = useState<string | null>(null);
   const [copiedTablePasswordUid, setCopiedTablePasswordUid] = useState<string | null>(null);
 
@@ -90,7 +93,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Role Assignment & New User Form State
   const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
-  const [newUserRole, setNewUserRole] = useState<'student' | 'teacher' | 'admin'>('student');
+  const [newUserRole, setNewUserRole] = useState<'student' | 'teacher' | 'admin' | 'parent'>('student');
   const [newUserAdminTitle, setNewUserAdminTitle] = useState('Müdür');
   const [newUserName, setNewUserName] = useState('');
   const [newUserEmail, setNewUserEmail] = useState('');
@@ -102,6 +105,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newUserBranch, setNewUserBranch] = useState('Matematik');
   const [newUserPhone, setNewUserPhone] = useState('');
   const [newUserNotes, setNewUserNotes] = useState('');
+  const [newUserStudentNumbers, setNewUserStudentNumbers] = useState('');
+  const [newUserRelationship, setNewUserRelationship] = useState('Anne');
+  const [selectedStudentUids, setSelectedStudentUids] = useState<string[]>([]);
+  const [isLinkStudentModalOpen, setIsLinkStudentModalOpen] = useState(false);
+  const [linkingParent, setLinkingParent] = useState<UserProfile | null>(null);
+  const [linkingStudentSearch, setLinkingStudentSearch] = useState('');
   const [selectedPermissions, setSelectedPermissions] = useState<string[]>([
     'Ders Takibi',
     'Ödev Teslimi',
@@ -121,10 +130,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const students = users.filter(u => u.role === 'student');
   const teachers = users.filter(u => u.role === 'teacher');
   const admins = users.filter(u => u.role === 'admin');
+  const parents = users.filter(u => u.role === 'parent');
 
   const rolePermissionTemplates: Record<string, string[]> = {
     student: ['Ders Takibi', 'Ödev Teslimi', 'Rozet & Puan Kazanımı', 'Duyuru Görüntüleme', 'Öğretmenle İletişim'],
     teacher: ['Ödev Oluşturma & Puanlama', 'Sınav Notu Girişi', 'Yoklama Alma', 'Duyuru Yayınlama', 'Sınıf Takibi', 'Birebir Mesajlaşma'],
+    parent: [
+      'Öğrenci Not ve Karne Takibi',
+      'Günlük Devamsızlık ve İzin Bilgisi',
+      'Ödev, Proje ve Teslim Durumu',
+      'Okul & Sınıf Duyuruları',
+      'Öğretmenle Doğrudan İletişim / Mesajlaşma'
+    ],
     admin: [
       'Tam Sistem ve Firestore Veritabanı Erişimi',
       'Yeni Yönetici (Admin) ve Öğretmen Atama Yetkisi',
@@ -135,15 +152,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     ]
   };
 
-  const handleRoleSelect = (role: 'student' | 'teacher' | 'admin') => {
+  const handleRoleSelect = (role: 'student' | 'teacher' | 'admin' | 'parent') => {
     setNewUserRole(role);
     setSelectedPermissions(rolePermissionTemplates[role] || []);
     if (role === 'student' && !newUserPassword) {
       setNewUserPassword(generateUniqueStudentPassword({ style: 'school', schoolNumber: newUserSchoolNumber || undefined }));
+    } else if (role === 'parent' && !newUserPassword) {
+      const cleanDigits = newUserPhone.replace(/\D/g, '');
+      const lastDigits = cleanDigits.slice(-4) || `${Math.floor(1000 + Math.random() * 9000)}`;
+      setNewUserPassword(`veli${lastDigits}`);
     }
   };
 
   const handleGenerateNewUserPassword = (style: PasswordStyle = 'school') => {
+    if (newUserRole === 'parent') {
+      const lastDigits = Math.floor(1000 + Math.random() * 9000);
+      setNewUserPassword(`veli${lastDigits}`);
+      setNewUserPasswordCopied(false);
+      return;
+    }
     const freshPass = generateUniqueStudentPassword({ 
       style, 
       schoolNumber: newUserSchoolNumber.trim() || undefined 
@@ -174,6 +201,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     await dataService.resetUserPassword(student.uid, newPass, adminName);
     setAddUserSuccess(`✓ "${student.displayName}" için yeni eşsiz şifre (${newPass}) tanımlandı.`);
     setTimeout(() => setAddUserSuccess(null), 3500);
+  };
+
+  const handleResetParentPassword = async (parent: UserProfile) => {
+    const cleanDigits = (parent.phone || '').replace(/\D/g, '');
+    const lastDigits = cleanDigits.slice(-4) || `${Math.floor(1000 + Math.random() * 9000)}`;
+    const newPass = `veli${lastDigits}`;
+    const adminName = currentUser?.displayName || 'Sistem Yöneticisi';
+    await dataService.resetUserPassword(parent.uid, newPass, adminName);
+    setAddUserSuccess(`✓ "${parent.displayName}" için yeni giriş şifresi (${newPass}) tanımlandı.`);
+    setTimeout(() => setAddUserSuccess(null), 4000);
+  };
+
+  const handleLinkStudentToParent = async (parentUid: string, studentNumberOrUid: string) => {
+    const adminName = currentUser?.displayName || 'Sistem Yöneticisi';
+    const success = await dataService.linkStudentToParent(parentUid, studentNumberOrUid, adminName);
+    if (success) {
+      setAddUserSuccess('✓ Öğrenci veli hesabına başarıyla bağlandı.');
+      setTimeout(() => setAddUserSuccess(null), 3000);
+    }
+  };
+
+  const handleUnlinkStudentFromParent = async (parentUid: string, studentNumberOrUid: string) => {
+    if (window.confirm('Bu öğrenci ile veli arasındaki bağlantıyı kaldırmak istediğinize emin misiniz?')) {
+      const adminName = currentUser?.displayName || 'Sistem Yöneticisi';
+      const success = await dataService.unlinkStudentFromParent(parentUid, studentNumberOrUid, adminName);
+      if (success) {
+        setAddUserSuccess('✓ Öğrenci bağlantısı veli profilinden kaldırıldı.');
+        setTimeout(() => setAddUserSuccess(null), 3000);
+      }
+    }
   };
 
   const togglePermission = (perm: string) => {
@@ -349,6 +406,57 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleAssignRoleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUserName.trim()) return;
+
+    if (newUserRole === 'parent') {
+      if (!newUserPhone.trim() && !newUserEmail.trim()) {
+        alert('Veli girişi için lütfen en az bir telefon numarası veya e-posta adresi girin.');
+        return;
+      }
+
+      setIsSubmittingRole(true);
+      try {
+        const adminName = currentUser?.displayName || 'Sistem Yöneticisi';
+        const parsedStudentNos = newUserStudentNumbers
+          ? newUserStudentNumbers.split(/[,;\s]+/).map(s => s.trim().replace(/^#/, '')).filter(Boolean)
+          : undefined;
+
+        const result = await dataService.createParentAccount({
+          parentName: newUserName.trim(),
+          parentPhone: newUserPhone.trim(),
+          parentEmail: newUserEmail.trim() || undefined,
+          parentPassword: newUserPassword.trim() || undefined,
+          studentNumbers: parsedStudentNos,
+          studentIds: selectedStudentUids.length > 0 ? selectedStudentUids : undefined,
+          relationship: newUserRelationship,
+          notes: newUserNotes.trim() || undefined,
+          createdBy: adminName
+        });
+
+        setAddUserSuccess(`✓ Veli "${result.parent.displayName}" hesabı başarıyla açıldı ve ${result.linkedStudentsCount} öğrenci ile bağlandı! Giriş Şifresi: "${result.parent.password}"`);
+        setIsAddUserModalOpen(false);
+        setNewUserName('');
+        setNewUserEmail('');
+        setNewUserSchoolNumber('');
+        setNewUserPassword('');
+        setNewUserPhone('');
+        setNewUserNotes('');
+        setNewUserStudentNumbers('');
+        setSelectedStudentUids([]);
+        
+        try {
+          confetti({ particleCount: 60, spread: 80 });
+        } catch (err) {}
+        
+        setTimeout(() => setAddUserSuccess(null), 5000);
+        return;
+      } catch (err: any) {
+        console.error(err);
+        alert(err.message || 'Veli hesabı oluşturulurken bir hata oluştu.');
+        return;
+      } finally {
+        setIsSubmittingRole(false);
+      }
+    }
     
     const assignedSchoolNo = newUserRole === 'student' ? (newUserSchoolNumber.trim() || `${Math.floor(1000 + Math.random() * 9000)}`) : undefined;
     const finalEmail = newUserEmail.trim() || (newUserRole === 'student' && assignedSchoolNo ? `${assignedSchoolNo}@gnsial.k12.tr` : `${newUserName.toLowerCase().replace(/\s+/g, '.')}@gnsial.k12.tr`);
@@ -404,12 +512,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const filteredUsers = users.filter(u => {
-    const matchSearch = (u.displayName || '').toLowerCase().includes(searchUser.toLowerCase()) || 
-                        (u.email || '').toLowerCase().includes(searchUser.toLowerCase()) ||
-                        (u.schoolNumber && u.schoolNumber.includes(searchUser));
+    const query = searchUser.toLowerCase();
+    const matchSearch = (u.displayName || '').toLowerCase().includes(query) || 
+                        (u.email || '').toLowerCase().includes(query) ||
+                        (u.phone && u.phone.includes(searchUser)) ||
+                        (u.schoolNumber && u.schoolNumber.includes(searchUser)) ||
+                        (u.studentNumbers && u.studentNumbers.some(no => no.includes(searchUser)));
     const matchRole = roleFilter === 'all' || u.role === roleFilter;
     const matchClass = classFilter === 'all' || u.classGrade === classFilter;
     return matchSearch && matchRole && matchClass;
+  });
+
+  const filteredParents = parents.filter(p => {
+    const query = parentSearch.toLowerCase();
+    const matchName = (p.displayName || '').toLowerCase().includes(query);
+    const matchPhone = (p.phone || '').includes(parentSearch);
+    const matchEmail = (p.email || '').toLowerCase().includes(query);
+    const matchStudent = (p.studentNumbers || []).some(no => no.includes(parentSearch)) ||
+      (p.studentIds || []).some(id => {
+        const st = students.find(s => s.uid === id);
+        return st && st.displayName.toLowerCase().includes(query);
+      });
+    return !parentSearch || matchName || matchPhone || matchEmail || matchStudent;
   });
 
   return (
@@ -448,6 +572,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           <div className="flex items-center gap-3 shrink-0 flex-wrap">
+            <button
+              id="admin-open-parent-excel-btn"
+              onClick={() => setIsExcelParentImportOpen(true)}
+              className="py-3 px-5 rounded-2xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-black flex items-center gap-2 shadow-lg shadow-teal-600/30 transition hover:scale-105 active:scale-95 cursor-pointer"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>Excel ile Toplu Veli Ekle</span>
+            </button>
+
+            <button
+              id="admin-open-parent-assignment-btn"
+              onClick={() => {
+                handleRoleSelect('parent');
+                setIsAddUserModalOpen(true);
+              }}
+              className="py-3 px-5 rounded-2xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-black flex items-center gap-2 shadow-lg shadow-amber-600/30 transition hover:scale-105 active:scale-95 cursor-pointer"
+            >
+              <Users className="w-4 h-4" />
+              <span>+ Yeni Veli Tanımla</span>
+            </button>
+
             <button
               id="admin-open-admin-assignment-btn"
               onClick={() => {
@@ -509,6 +654,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </button>
 
         <button
+          id="admin-tab-parents-btn"
+          onClick={() => setActiveTab('parents')}
+          className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold rounded-xl whitespace-nowrap transition cursor-pointer ${
+            activeTab === 'parents'
+              ? 'bg-amber-600 text-white shadow-md shadow-amber-600/20'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <Users className="w-4 h-4 text-amber-500" />
+          Veli Yönetimi ({parents.length})
+        </button>
+
+        <button
           onClick={() => setActiveTab('roles')}
           className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold rounded-xl whitespace-nowrap transition ${
             activeTab === 'roles'
@@ -560,7 +718,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* OVERVIEW TAB */}
       {activeTab === 'overview' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
             <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
               <span className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
                 <GraduationCap className="w-4 h-4 text-emerald-500" />
@@ -568,6 +726,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </span>
               <p className="text-3xl font-black text-slate-900 dark:text-white mt-1">{students.length}</p>
               <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1 font-semibold">{classes.length} Aktif Şubede</p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
+              <span className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
+                <Users className="w-4 h-4 text-amber-500" />
+                Kayıtlı Veliler
+              </span>
+              <p className="text-3xl font-black text-slate-900 dark:text-white mt-1">{parents.length}</p>
+              <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1 font-semibold">
+                {parents.filter(p => (p.studentIds?.length || p.studentNumbers?.length)).length} Öğrenci Bağlantılı
+              </p>
             </div>
 
             <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
@@ -859,13 +1028,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </button>
 
               <button
-                id="admin-excel-import-btn"
-                onClick={() => setIsExcelImportOpen(true)}
+                id="admin-excel-parent-import-btn"
+                onClick={() => setIsExcelParentImportOpen(true)}
                 className="py-2 px-3.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition cursor-pointer"
-                title="Excel (.xlsx, .xls) veya CSV dosyasından toplu öğrenci ve veli ekleyin"
+                title="Excel (.xlsx, .xls, .csv) tablosundan toplu veli hesabı ekleyin"
               >
                 <FileSpreadsheet className="w-4 h-4" />
-                <span>📊 Excel ile Toplu Öğrenci Ekle</span>
+                <span>📊 Excel ile Toplu Veli Ekle</span>
+              </button>
+
+              <button
+                id="admin-excel-import-btn"
+                onClick={() => setIsExcelImportOpen(true)}
+                className="py-2 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                title="Excel (.xlsx, .xls) veya CSV dosyasından toplu öğrenci ekleyin"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>📊 Excel ile Öğrenci Ekle</span>
+              </button>
+
+              <button
+                id="admin-add-parent-btn"
+                onClick={() => {
+                  handleRoleSelect('parent');
+                  setIsAddUserModalOpen(true);
+                }}
+                className="py-2 px-3.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+              >
+                <Users className="w-4 h-4" />
+                <span>+ Yeni Veli Ekle</span>
               </button>
 
               <button
@@ -896,7 +1087,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="İsim, No veya e-posta..."
+                  placeholder="İsim, No, Telefon..."
                   value={searchUser}
                   onChange={(e) => setSearchUser(e.target.value)}
                   className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none"
@@ -910,6 +1101,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               >
                 <option value="all">Tüm Roller</option>
                 <option value="student">Yalnızca Öğrenciler</option>
+                <option value="parent">Yalnızca Veliler</option>
                 <option value="teacher">Yalnızca Öğretmenler</option>
                 <option value="admin">Yöneticiler</option>
               </select>
@@ -922,8 +1114,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <tr>
                   <th className="py-3 px-4">Okul No / ID</th>
                   <th className="py-3 px-4">Ad Soyad</th>
-                  <th className="py-3 px-4">E-Posta</th>
-                  <th className="py-3 px-4">Sınıf / Branş</th>
+                  <th className="py-3 px-4">E-Posta / Telefon</th>
+                  <th className="py-3 px-4">Sınıf / Branş / Öğrenci</th>
                   <th className="py-3 px-4">Durum</th>
                   <th className="py-3 px-4">Giriş Şifresi</th>
                   <th className="py-3 px-4">Firestore Rolü</th>
@@ -953,13 +1145,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               Yönetici
                             </span>
                           )}
+                          {!isRootAdmin && u.role === 'parent' && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300 border border-amber-300 dark:border-amber-700 flex items-center gap-1">
+                              <Users className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                              Veli {u.relationship ? `(${u.relationship})` : ''}
+                            </span>
+                          )}
                           {u.status === 'deactivated' && (
                             <span className="text-[9px] px-1.5 py-0.2 rounded bg-rose-100 text-rose-700 font-bold">Askıda</span>
                           )}
                         </div>
                       </td>
                       <td className="py-3 px-4 text-slate-500 font-medium">
-                        {u.email}
+                        <div>{u.email}</div>
+                        {u.phone && <div className="text-[11px] text-slate-400">{u.phone}</div>}
                       </td>
                       <td className="py-3 px-4">
                         {isRootAdmin ? (
@@ -970,6 +1169,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
                             {u.classGrade || 'Atanmadı'}
                           </span>
+                        ) : u.role === 'parent' ? (
+                          <div className="flex flex-wrap gap-1 items-center">
+                            {((u.studentNumbers && u.studentNumbers.length > 0) || (u.studentIds && u.studentIds.length > 0)) ? (
+                              <>
+                                {(u.studentNumbers || []).map((no, idx) => (
+                                  <span key={idx} className="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border border-amber-200/60 flex items-center gap-1">
+                                    <GraduationCap className="w-3 h-3 text-amber-600" />
+                                    Öğr: #{no}
+                                  </span>
+                                ))}
+                              </>
+                            ) : (
+                              <span className="text-[11px] text-slate-400 italic">Öğrenci Bağlanmadı</span>
+                            )}
+                          </div>
                         ) : u.role === 'teacher' ? (
                           <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
                             {u.branch || 'Genel Branş'}
@@ -991,7 +1205,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </span>
                       </td>
                       <td className="py-3 px-4">
-                        {u.role === 'student' ? (
+                        {u.role === 'student' || u.role === 'parent' ? (
                           <div className="flex items-center gap-1.5">
                             <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40">
                               {visibleTablePasswordUid === u.uid ? (u.password || 'Gns2026!') : '••••••'}
@@ -1012,14 +1226,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             >
                               {copiedTablePasswordUid === u.uid ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleReassignStudentPasswordInTable(u)}
-                              className="p-1 rounded bg-amber-100 hover:bg-amber-200 dark:bg-amber-950 dark:hover:bg-amber-900 text-amber-700 dark:text-amber-300 transition cursor-pointer"
-                              title="Yeni Eşsiz Şifre Ata"
-                            >
-                              <RefreshCw className="w-3 h-3" />
-                            </button>
+                            {u.role === 'student' && (
+                              <button
+                                type="button"
+                                onClick={() => handleReassignStudentPasswordInTable(u)}
+                                className="p-1 rounded bg-amber-100 hover:bg-amber-200 dark:bg-amber-950 dark:hover:bg-amber-900 text-amber-700 dark:text-amber-300 transition cursor-pointer"
+                                title="Yeni Eşsiz Şifre Ata"
+                              >
+                                <RefreshCw className="w-3 h-3" />
+                              </button>
+                            )}
                           </div>
                         ) : (
                           <span className="text-[11px] text-slate-400 font-mono italic">SMS / E-Posta</span>
@@ -1039,6 +1255,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             title="Rolü değiştir ve Firestore'a yaz"
                           >
                             <option value="student">Öğrenci</option>
+                            <option value="parent">Veli</option>
                             <option value="teacher">Öğretmen</option>
                             <option value="admin">Yönetici (Admin)</option>
                           </select>
@@ -1081,6 +1298,348 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       )}
+
+      {/* PARENTS TAB */}
+      {activeTab === 'parents' && (() => {
+        const filteredParents = parents.filter(p => {
+          const q = parentSearch.toLowerCase().trim();
+          if (!q) return true;
+          const matchName = (p.displayName || '').toLowerCase().includes(q);
+          const matchPhone = (p.phone || '').includes(q);
+          const matchEmail = (p.email || '').toLowerCase().includes(q);
+          const matchNos = (p.studentNumbers || []).some(no => no.toLowerCase().includes(q));
+          const matchStudentName = students.some(st => 
+            ((p.studentIds || []).includes(st.uid) || (p.studentNumbers || []).includes(st.schoolNumber || '')) &&
+            st.displayName.toLowerCase().includes(q)
+          );
+          return matchName || matchPhone || matchEmail || matchNos || matchStudentName;
+        });
+
+        const linkedCount = parents.filter(p => (p.studentNumbers && p.studentNumbers.length > 0) || (p.studentIds && p.studentIds.length > 0)).length;
+        const unlinkedCount = parents.length - linkedCount;
+        const activeCount = parents.filter(p => p.status !== 'deactivated').length;
+
+        return (
+          <div className="space-y-6">
+            {/* Header & Actions */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs">
+              <div>
+                <h2 className="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2">
+                  <Users className="w-5 h-5 text-amber-500" />
+                  Veli Yönetimi & Portalı
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Velilerin portala telefon numarası ve şifreleri ile giriş yapmalarını sağlayın. Her türlü Excel tablosundan (.xlsx, .xls, .csv, .ods vb.) tek tıkla toplu veli hesabı oluşturabilir veya tek tek veli ekleyebilirsiniz.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setIsExcelParentImportOpen(true)}
+                  className="py-2.5 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2 shadow-md shadow-emerald-600/20 transition cursor-pointer"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  Excel ile Toplu Veli Ekle
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleRoleSelect('parent');
+                    setIsAddUserModalOpen(true);
+                  }}
+                  className="py-2.5 px-3.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold flex items-center gap-2 shadow-md shadow-amber-500/20 transition cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  Yeni Veli Tanımla
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Metrics */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+              <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
+                <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Toplam Kayıtlı Veli</span>
+                <p className="text-2xl font-black text-slate-900 dark:text-white mt-1">{parents.length}</p>
+              </div>
+              <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
+                <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">Öğrenciyle Eşleşmiş</span>
+                <p className="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">{linkedCount}</p>
+              </div>
+              <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
+                <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400">Eşleştirme Bekleyen</span>
+                <p className="text-2xl font-black text-amber-600 dark:text-amber-400 mt-1">{unlinkedCount}</p>
+              </div>
+              <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
+                <span className="text-[11px] font-bold text-blue-600 dark:text-blue-400">Aktif Portal Erişimi</span>
+                <p className="text-2xl font-black text-blue-600 dark:text-blue-400 mt-1">{activeCount}</p>
+              </div>
+            </div>
+
+            {/* Search Toolbar */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800">
+              <div className="relative w-full sm:w-80">
+                <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Veli adı, telefon, e-posta veya öğrenci..."
+                  value={parentSearch}
+                  onChange={(e) => setParentSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                Gösterilen: <span className="text-slate-900 dark:text-white font-bold">{filteredParents.length}</span> / {parents.length} Veli
+              </div>
+            </div>
+
+            {/* Table or Empty State */}
+            {filteredParents.length === 0 ? (
+              <div className="bg-white dark:bg-slate-900 rounded-3xl border-2 border-dashed border-slate-200 dark:border-slate-800 p-10 text-center max-w-xl mx-auto shadow-xs">
+                <div className="w-14 h-14 rounded-2xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-3 border border-amber-200 dark:border-amber-800/60">
+                  <Users className="w-7 h-7" />
+                </div>
+                <h3 className="text-sm font-black text-slate-900 dark:text-white mb-1">
+                  {parents.length === 0 ? 'Henüz Veli Hesabı Bulunmuyor' : 'Aramaya Uygun Veli Bulunamadı'}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mb-5 max-w-md mx-auto">
+                  {parents.length === 0
+                    ? 'Okul velilerini Excel tablosundan tek tıkla toplu olarak içeri aktarabilir veya "Yeni Veli Tanımla" butonu ile manuel olarak ekleyebilirsiniz.'
+                    : 'Arama filtrenizi temizleyerek tüm kayıtlı velileri görüntüleyebilirsiniz.'}
+                </p>
+                {parents.length === 0 ? (
+                  <div className="flex items-center justify-center gap-3 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setIsExcelParentImportOpen(true)}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-2 cursor-pointer shadow-sm"
+                    >
+                      <FileSpreadsheet className="w-4 h-4" />
+                      Excel Dosyasından Veli Yükle
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleRoleSelect('parent');
+                        setIsAddUserModalOpen(true);
+                      }}
+                      className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-xl transition flex items-center gap-2 cursor-pointer shadow-sm"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Manuel Veli Ekle
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setParentSearch('')}
+                    className="px-3.5 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 text-xs font-bold rounded-xl transition cursor-pointer"
+                  >
+                    Aramayı Temizle
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-xs">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 text-slate-500 dark:text-slate-400">
+                        <th className="py-3 px-4 font-bold">Veli Adı & Yakınlık</th>
+                        <th className="py-3 px-4 font-bold">Giriş Telefonu</th>
+                        <th className="py-3 px-4 font-bold">E-Posta</th>
+                        <th className="py-3 px-4 font-bold">Bağlı Öğrenciler</th>
+                        <th className="py-3 px-4 font-bold">Giriş Şifresi</th>
+                        <th className="py-3 px-4 font-bold">Durum</th>
+                        <th className="py-3 px-4 font-bold text-right">İşlemler</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {filteredParents.map((p) => {
+                        const isVisiblePass = visibleTablePasswordUid === p.uid;
+                        const isCopied = copiedTablePasswordUid === p.uid;
+                        const parentPass = p.password || '123456';
+
+                        // Find all students connected to this parent
+                        const linkedStudents = students.filter(st => 
+                          (p.studentIds || []).includes(st.uid) ||
+                          (st.schoolNumber && (p.studentNumbers || []).includes(st.schoolNumber))
+                        );
+
+                        // Also identify any studentNumbers that didn't match an active student record
+                        const unmatchedNos = (p.studentNumbers || []).filter(no => 
+                          !linkedStudents.some(st => st.schoolNumber === no)
+                        );
+
+                        return (
+                          <tr key={p.uid} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition">
+                            {/* Veli Bilgisi */}
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 flex items-center justify-center font-black text-xs shrink-0 border border-amber-200 dark:border-amber-800/40">
+                                  {p.displayName?.charAt(0) || 'V'}
+                                </div>
+                                <div>
+                                  <span className="font-black text-slate-900 dark:text-white block">
+                                    {p.displayName}
+                                  </span>
+                                  <span className="inline-flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400 font-semibold bg-amber-50 dark:bg-amber-950/50 px-1.5 py-0.5 rounded-md mt-0.5 border border-amber-200 dark:border-amber-800/30">
+                                    <Users className="w-2.5 h-2.5" />
+                                    Veli
+                                  </span>
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* Telefon */}
+                            <td className="py-3 px-4">
+                              <div className="font-mono font-bold text-slate-900 dark:text-white">
+                                {p.phone || '—'}
+                              </div>
+                              <span className="text-[10px] text-slate-400 block">
+                                Giriş Kimliği
+                              </span>
+                            </td>
+
+                            {/* E-Posta */}
+                            <td className="py-3 px-4 text-slate-600 dark:text-slate-400">
+                              {p.email || '—'}
+                            </td>
+
+                            {/* Bağlı Öğrenciler */}
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-1.5 flex-wrap max-w-xs">
+                                {linkedStudents.map(st => (
+                                  <span
+                                    key={st.uid}
+                                    className="inline-flex items-center gap-1 text-[11px] bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold px-2 py-0.5 rounded-lg border border-emerald-200 dark:border-emerald-800/40"
+                                  >
+                                    <GraduationCap className="w-3 h-3" />
+                                    <span>#{st.schoolNumber || '-'} {st.displayName} ({st.classGrade || 'Sınıfsız'})</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUnlinkStudentFromParent(p.uid, st.uid)}
+                                      className="text-slate-400 hover:text-rose-600 transition ml-0.5 cursor-pointer"
+                                      title="Öğrenci Bağlantısını Kaldır"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  </span>
+                                ))}
+
+                                {unmatchedNos.map(no => (
+                                  <span
+                                    key={no}
+                                    className="inline-flex items-center gap-1 text-[11px] bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 font-semibold px-2 py-0.5 rounded-lg border border-amber-200 dark:border-amber-800/40"
+                                    title="Öğrenci numarası kayıtlı, henüz sistemde öğrenci profili bulunmuyor"
+                                  >
+                                    <span>#{no}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUnlinkStudentFromParent(p.uid, no)}
+                                      className="text-slate-400 hover:text-rose-600 transition ml-0.5 cursor-pointer"
+                                      title="Numarayı Kaldır"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  </span>
+                                ))}
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setLinkingParent(p);
+                                    setIsLinkStudentModalOpen(true);
+                                  }}
+                                  className="inline-flex items-center gap-1 text-[10px] text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/40 hover:bg-purple-100 font-bold px-1.5 py-0.5 rounded-md border border-purple-200 dark:border-purple-800/40 transition cursor-pointer"
+                                  title="Yeni Öğrenci Eşleştir"
+                                >
+                                  <Plus className="w-3 h-3" />
+                                  Öğrenci Eşleştir
+                                </button>
+                              </div>
+                            </td>
+
+                            {/* Şifre */}
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-mono text-xs font-bold text-slate-800 dark:text-slate-200">
+                                  {isVisiblePass ? parentPass : '••••••'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setVisibleTablePasswordUid(isVisiblePass ? null : p.uid)}
+                                  className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition cursor-pointer"
+                                  title={isVisiblePass ? 'Gizle' : 'Göster'}
+                                >
+                                  {isVisiblePass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyTablePassword(p.uid, parentPass)}
+                                  className="p-1 text-slate-400 hover:text-purple-600 transition cursor-pointer"
+                                  title="Şifreyi Kopyala"
+                                >
+                                  {isCopied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleResetParentPassword(p)}
+                                  className="p-1 text-slate-400 hover:text-amber-500 transition cursor-pointer"
+                                  title="Yeni Şifre Ata"
+                                >
+                                  <RefreshCw className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+
+                            {/* Durum */}
+                            <td className="py-3 px-4">
+                              {p.status === 'deactivated' ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/50 px-2 py-0.5 rounded-full border border-rose-200 dark:border-rose-800">
+                                  Askıda
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
+                                  Aktif
+                                </span>
+                              )}
+                            </td>
+
+                            {/* İşlemler */}
+                            <td className="py-3 px-4 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleUserStatus(p.uid, p.status)}
+                                  className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                                  title={p.status === 'deactivated' ? 'Hesabı Aktifleştir' : 'Hesabı Askıya Al'}
+                                >
+                                  {p.status === 'deactivated' ? <UserCheck className="w-4 h-4 text-emerald-600" /> : <UserX className="w-4 h-4 text-amber-500" />}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteUser(p.uid, p.displayName)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                                  title="Hesabı Tamamen Sil"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* CLASSES TAB */}
       {activeTab === 'classes' && (
@@ -1465,7 +2024,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <label className="block font-bold text-slate-700 dark:text-slate-300 mb-2">
                   Atanacak Rol Seviyesi (Role Level)
                 </label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <button
                     type="button"
                     onClick={() => handleRoleSelect('student')}
@@ -1477,6 +2036,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   >
                     <GraduationCap className="w-5 h-5" />
                     <span>Öğrenci</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleRoleSelect('parent')}
+                    className={`py-3 px-3 rounded-xl border text-center font-bold transition flex flex-col items-center gap-1.5 cursor-pointer ${
+                      newUserRole === 'parent'
+                        ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 ring-2 ring-amber-500/20'
+                        : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
+                    }`}
+                  >
+                    <Users className="w-5 h-5" />
+                    <span>Veli</span>
                   </button>
 
                   <button
@@ -1514,7 +2086,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <input
                     type="text"
                     required
-                    placeholder="Örn: Caner Korkmaz"
+                    placeholder="Örn: Hatice Çelik"
                     value={newUserName}
                     onChange={(e) => setNewUserName(e.target.value)}
                     className="w-full px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-purple-500"
@@ -1523,31 +2095,162 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 <div>
                   <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Telefon Numarası {newUserRole === 'student' ? '(Giriş İçin)' : '(Opsiyonel)'}
+                    Telefon Numarası {newUserRole === 'parent' ? '(Giriş İçin Zorunlu *)' : newUserRole === 'student' ? '(Giriş İçin)' : '(Opsiyonel)'}
                   </label>
                   <input
                     type="tel"
-                    placeholder="Örn: 0555 123 4567"
+                    required={newUserRole === 'parent'}
+                    placeholder="Örn: 0532 111 2233"
                     value={newUserPhone}
                     onChange={(e) => setNewUserPhone(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-purple-500"
+                    className="w-full px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-purple-500 font-mono"
                   />
                 </div>
 
                 <div>
                   <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    E-Posta Adresi {newUserRole === 'student' ? '(Opsiyonel)' : '*'}
+                    E-Posta Adresi {newUserRole === 'student' || newUserRole === 'parent' ? '(Opsiyonel)' : '*'}
                   </label>
                   <input
                     type="email"
-                    required={newUserRole !== 'student'}
-                    placeholder={newUserRole === 'student' ? 'Boş bırakılırsa otomatik atanır' : 'Örn: caner.korkmaz@gnsial.k12.tr'}
+                    required={newUserRole === 'admin' || newUserRole === 'teacher'}
+                    placeholder={newUserRole === 'parent' ? 'veli@eposta.com (Opsiyonel)' : newUserRole === 'student' ? 'Boş bırakılırsa otomatik atanır' : 'Örn: ad.soyad@gnsial.k12.tr'}
                     value={newUserEmail}
                     onChange={(e) => setNewUserEmail(e.target.value)}
                     className="w-full px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-purple-500"
                   />
                 </div>
               </div>
+
+              {/* Conditional inputs for parent / student / teacher / admin */}
+              {newUserRole === 'parent' && (
+                <div className="space-y-3">
+                  <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
+                    <Users className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-black text-xs">Veli Portalı Yetkilendirme & Giriş Bilgileri</p>
+                      <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5 leading-relaxed">
+                        Veliler sisteme <strong>Telefon Numarası</strong> ve <strong>Giriş Şifresi</strong> ile giriş yapar. Öğrenci numaralarını girerek veliyi doğrudan öğrencinin profiliyle eşleştirebilirsiniz.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Yakınlık Derecesi</label>
+                      <select
+                        value={newUserRelationship}
+                        onChange={(e) => setNewUserRelationship(e.target.value)}
+                        className="w-full px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
+                      >
+                        <option value="Anne">Anne</option>
+                        <option value="Baba">Baba</option>
+                        <option value="Vasi">Vasi (Yasal Temsilci)</option>
+                        <option value="Abla">Abla</option>
+                        <option value="Ağabey">Ağabey</option>
+                        <option value="Diğer">Diğer Yakını</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Bağlanacak Öğrenci Numaraları
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Örn: 1045, 1082 (Virgülle ayırın)"
+                        value={newUserStudentNumbers}
+                        onChange={(e) => setNewUserStudentNumbers(e.target.value)}
+                        className="w-full px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Quick Student Selector Helper */}
+                  {students.length > 0 && (
+                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-400">
+                        Hızlı Öğrenci Seç:
+                      </span>
+                      <select
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (!val) return;
+                          const current = newUserStudentNumbers.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+                          if (!current.includes(val)) {
+                            setNewUserStudentNumbers(current.length > 0 ? `${current.join(', ')}, ${val}` : val);
+                          }
+                          e.target.value = '';
+                        }}
+                        defaultValue=""
+                        className="py-1 px-2.5 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 cursor-pointer"
+                      >
+                        <option value="">-- Listeden Öğrenci Ekle --</option>
+                        {students.map(s => (
+                          <option key={s.uid} value={s.schoolNumber || s.uid}>
+                            {s.displayName} {s.schoolNumber ? `(#${s.schoolNumber})` : ''} - {s.classGrade || 'Sınıfsız'}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Veli Giriş Şifresi */}
+                  <div className="p-3.5 rounded-2xl bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 text-xs">
+                        <KeyRound className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                        <span>Veli Portalı Giriş Şifresi</span>
+                        <span className="text-rose-500">*</span>
+                      </label>
+                      <span className="text-[10px] text-amber-800 dark:text-amber-300 font-semibold">
+                        Girişte Telefon + Şifre Kullanılır
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          type={showNewUserPassword ? 'text' : 'password'}
+                          value={newUserPassword}
+                          onChange={(e) => setNewUserPassword(e.target.value)}
+                          placeholder="Örn: veli4821 veya 123456"
+                          required
+                          className="w-full pl-3.5 pr-10 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs font-mono font-bold text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-amber-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowNewUserPassword(!showNewUserPassword)}
+                          className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
+                          title={showNewUserPassword ? 'Şifreyi Gizle' : 'Şifreyi Göster'}
+                        >
+                          {showNewUserPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleGenerateNewUserPassword('school')}
+                        className="px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer shrink-0"
+                        title="Veli için rastgele şifre üretir"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Yeni Şifre Üret</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleCopyNewUserPassword}
+                        className="px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs flex items-center gap-1 transition cursor-pointer shrink-0"
+                        title="Şifreyi Kopyala"
+                      >
+                        {newUserPasswordCopied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{newUserPasswordCopied ? 'Kopyalandı' : 'Kopyala'}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Conditional inputs for student / teacher / admin */}
               {newUserRole === 'admin' && (
@@ -1814,6 +2517,134 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         isOpen={isExcelImportOpen}
         onClose={() => setIsExcelImportOpen(false)}
       />
+
+      {/* Bulk Parent Import from Excel Modal */}
+      <ExcelParentImportModal
+        isOpen={isExcelParentImportOpen}
+        onClose={() => setIsExcelParentImportOpen(false)}
+      />
+
+      {/* Student to Parent Linking Modal */}
+      {isLinkStudentModalOpen && linkingParent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-lg w-full p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-600">
+                  <Users className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                    Öğrenciyi Veliye Eşleştir
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Veli: <strong>{linkingParent.displayName}</strong> ({linkingParent.phone || 'Telefon yok'})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLinkStudentModalOpen(false);
+                  setLinkingParent(null);
+                  setLinkingStudentSearch('');
+                }}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Öğrenci Ara (İsim, Numara veya Sınıf)
+                </label>
+                <div className="relative">
+                  <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Örn: 1045 veya Ahmet..."
+                    value={linkingStudentSearch}
+                    onChange={(e) => setLinkingStudentSearch(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+              </div>
+
+              <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1 divide-y divide-slate-100 dark:divide-slate-800">
+                {students
+                  .filter(st => {
+                    const q = linkingStudentSearch.toLowerCase().trim();
+                    if (!q) return true;
+                    return (
+                      st.displayName.toLowerCase().includes(q) ||
+                      (st.schoolNumber || '').includes(q) ||
+                      (st.classGrade || '').toLowerCase().includes(q)
+                    );
+                  })
+                  .slice(0, 15)
+                  .map(st => {
+                    const isAlreadyLinked = 
+                      (linkingParent.studentIds || []).includes(st.uid) ||
+                      (st.schoolNumber && (linkingParent.studentNumbers || []).includes(st.schoolNumber));
+
+                    return (
+                      <div key={st.uid} className="flex items-center justify-between py-2 px-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 transition">
+                        <div>
+                          <p className="font-bold text-xs text-slate-900 dark:text-white flex items-center gap-1.5">
+                            <GraduationCap className="w-3.5 h-3.5 text-purple-600" />
+                            <span>{st.displayName}</span>
+                            <span className="font-mono text-[10px] text-slate-400">#{st.schoolNumber || '-'}</span>
+                          </p>
+                          <p className="text-[10px] text-slate-500 mt-0.5">
+                            Sınıf: {st.classGrade || 'Belirtilmedi'}
+                          </p>
+                        </div>
+
+                        {isAlreadyLinked ? (
+                          <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-bold px-2 py-1 bg-emerald-50 dark:bg-emerald-950/50 rounded-lg flex items-center gap-1">
+                            <Check className="w-3.5 h-3.5" />
+                            Bağlı
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await handleLinkStudentToParent(linkingParent.uid, st.uid);
+                              setLinkingParent(prev => prev ? {
+                                ...prev,
+                                studentIds: [...(prev.studentIds || []), st.uid],
+                                studentNumbers: Array.from(new Set([...(prev.studentNumbers || []), st.schoolNumber || ''])).filter(Boolean)
+                              } : null);
+                            }}
+                            className="text-xs font-bold px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white transition cursor-pointer"
+                          >
+                            Bağla
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLinkStudentModalOpen(false);
+                  setLinkingParent(null);
+                  setLinkingStudentSearch('');
+                }}
+                className="px-4 py-2 text-xs font-bold rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 transition cursor-pointer"
+              >
+                Kapat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
