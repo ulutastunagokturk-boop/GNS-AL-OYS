@@ -83,7 +83,10 @@ export interface Homework {
   description: string;
   teacherId: string;
   teacherName: string;
-  targetClass: string; // e.g. "10-A" or "Tüm Okul"
+  targetType?: 'class' | 'student'; // Sınıf bazlı veya öğrenciye özel
+  targetClass: string; // e.g. "10-A" or "Tüm Okul" (veya seçilen sınıflar)
+  targetClasses?: string[]; // Çoklu şube seçimi: ['10-A', '10-B']
+  targetStudentIds?: string[]; // Öğrenci seçerek ödev atama
   dueDate: string;     // YYYY-MM-DD
   dueTime?: string;    // HH:mm (e.g. "23:59")
   maxScore: number;
@@ -330,10 +333,10 @@ export type DayOfWeek = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'frida
 export interface ClassPeriodInfo {
   period: number; // 1 to 8
   label: string; // '1. Ders'
-  startTime: string; // '08:30'
-  endTime: string; // '09:10'
-  breakDurationMin: number; // 10 or 50
-  breakLabel: string; // '10 dk Teneffüs' or '50 dk Öğle Arası'
+  startTime: string; // '08:50'
+  endTime: string; // '09:30'
+  breakDurationMin: number; // 10 or 40
+  breakLabel: string; // '10 dk Teneffüs' or '40 dk Öğle Arası'
   isLunchAfter?: boolean;
 }
 

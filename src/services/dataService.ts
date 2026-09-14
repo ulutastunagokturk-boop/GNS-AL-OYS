@@ -1992,11 +1992,29 @@ class DataService {
     return this.cache.homeworks;
   }
 
-  public getHomeworksForStudent(studentClass?: string): Homework[] {
-    if (!studentClass) return this.cache.homeworks;
-    return this.cache.homeworks.filter(hw => 
-      hw.targetClass === studentClass || hw.targetClass === 'Tüm Okul'
-    );
+  public getHomeworksForStudent(studentClass?: string, studentId?: string): Homework[] {
+    const cleanClass = studentClass ? studentClass.trim().toUpperCase() : '';
+    return this.cache.homeworks.filter(hw => {
+      // 1. If assigned specifically to selected students
+      if (hw.targetType === 'student' || (hw.targetStudentIds && hw.targetStudentIds.length > 0)) {
+        if (!studentId) return false;
+        return hw.targetStudentIds?.includes(studentId);
+      }
+
+      // 2. If assigned to multiple classes
+      if (hw.targetClasses && hw.targetClasses.length > 0) {
+        if (!cleanClass) return false;
+        return hw.targetClasses.some(c => c.trim().toUpperCase() === cleanClass);
+      }
+
+      // 3. All School
+      if (hw.targetClass === 'Tüm Okul') return true;
+
+      // 4. Single Class match
+      if (cleanClass && hw.targetClass && hw.targetClass.trim().toUpperCase() === cleanClass) return true;
+
+      return false;
+    });
   }
 
   public getHomeworksForTeacher(teacherId: string): Homework[] {
@@ -2006,10 +2024,19 @@ class DataService {
   public async addHomework(homework: Homework): Promise<Homework> {
     const updatedHomeworks = [homework, ...this.cache.homeworks];
     
-    // Automatically generate pending submission records for all students in that class
-    const targetStudents = homework.targetClass === 'Tüm Okul' 
-      ? this.getStudents() 
-      : this.getStudentsByClass(homework.targetClass);
+    // Determine target students
+    let targetStudents: UserProfile[] = [];
+    if (homework.targetType === 'student' && homework.targetStudentIds && homework.targetStudentIds.length > 0) {
+      targetStudents = this.getStudents().filter(st => homework.targetStudentIds?.includes(st.uid));
+    } else if (homework.targetClasses && homework.targetClasses.length > 0) {
+      targetStudents = this.getStudents().filter(st => 
+        st.classGrade && homework.targetClasses?.some(tc => tc.trim().toUpperCase() === st.classGrade?.trim().toUpperCase())
+      );
+    } else if (homework.targetClass === 'Tüm Okul') {
+      targetStudents = this.getStudents();
+    } else {
+      targetStudents = this.getStudentsByClass(homework.targetClass);
+    }
 
     const newSubmissions: HomeworkSubmission[] = targetStudents.map(st => ({
       id: `sub-${homework.id}-${st.uid}`,
@@ -2366,6 +2393,38 @@ class DataService {
       if (a.pinned && !b.pinned) return -1;
       if (!a.pinned && b.pinned) return 1;
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+  }
+
+  public getAnnouncementsForStudent(studentClass?: string): Announcement[] {
+    const all = this.getAnnouncements();
+    const cleanClass = studentClass ? studentClass.trim().toUpperCase() : '';
+    return all.filter(a => {
+      // Teachers only announcements are never shown to students/parents
+      if (a.targetAudience === 'teachers') return false;
+      if (a.targetAudience === 'all' || a.targetAudience === 'students') return true;
+      if (a.targetAudience === 'class') {
+        if (!cleanClass) return false;
+        if (a.targetClasses && a.targetClasses.some(c => c.trim().toUpperCase() === cleanClass)) return true;
+        if (a.targetClass && (a.targetClass === 'Tüm Okul' || a.targetClass.trim().toUpperCase() === cleanClass)) return true;
+      }
+      return false;
+    });
+  }
+
+  public getAnnouncementsForParent(childrenClasses: string[]): Announcement[] {
+    const all = this.getAnnouncements();
+    const cleanClasses = (childrenClasses || []).map(c => c.trim().toUpperCase());
+    return all.filter(a => {
+      // Teachers only announcements are never shown to students/parents
+      if (a.targetAudience === 'teachers') return false;
+      if (a.targetAudience === 'all' || a.targetAudience === 'students') return true;
+      if (a.targetAudience === 'class') {
+        if (cleanClasses.length === 0) return false;
+        if (a.targetClasses && a.targetClasses.some(c => cleanClasses.includes(c.trim().toUpperCase()))) return true;
+        if (a.targetClass && (a.targetClass === 'Tüm Okul' || cleanClasses.includes(a.targetClass.trim().toUpperCase()))) return true;
+      }
+      return false;
     });
   }
 

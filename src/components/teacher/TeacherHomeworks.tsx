@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
-import { Homework, HomeworkSubmission, HomeworkStatus, RubricItem, Attachment } from '../../types';
+import { Homework, HomeworkSubmission, HomeworkStatus, RubricItem, Attachment, UserProfile } from '../../types';
 import { 
   BookOpen, 
   Plus, 
@@ -23,14 +23,40 @@ import {
   Award,
   FileText,
   Sliders,
-  Send
+  Send,
+  UploadCloud,
+  Image as ImageIcon,
+  School,
+  UserCheck,
+  GraduationCap
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+
+const STANDARD_SUBJECTS = [
+  'Matematik',
+  'Fizik',
+  'Kimya',
+  'Biyoloji',
+  'Türk Dili ve Edebiyatı',
+  'Tarih',
+  'Coğrafya',
+  'Felsefe',
+  'İngilizce',
+  'Almanca',
+  'Din Kültürü ve Ahlak Bilgisi',
+  'Beden Eğitimi ve Spor',
+  'Görsel Sanatlar',
+  'Müzik',
+  'Bilişim Teknolojileri',
+  'Rehberlik',
+  'Genel Proje'
+];
 
 export const TeacherHomeworks: React.FC = () => {
   const { currentUser } = useAuth();
   const classes = dataService.getClasses();
   const homeworks = dataService.getHomeworks();
+  const allStudents = dataService.getStudents();
 
   const [selectedClassFilter, setSelectedClassFilter] = useState<string>('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -40,7 +66,14 @@ export const TeacherHomeworks: React.FC = () => {
   const [title, setTitle] = useState('');
   const [subject, setSubject] = useState(currentUser?.branch || 'Matematik');
   const [description, setDescription] = useState('');
-  const [targetClass, setTargetClass] = useState('Tüm Okul');
+  
+  // Target Mode: Class or Student
+  const [targetType, setTargetType] = useState<'class' | 'student'>('class');
+  const [selectedClasses, setSelectedClasses] = useState<string[]>(['Tüm Okul']);
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [studentSearchQuery, setStudentSearchQuery] = useState('');
+  const [studentClassFilter, setStudentClassFilter] = useState('all');
+
   const [dueDate, setDueDate] = useState(
     new Date(Date.now() + 1000 * 60 * 60 * 24 * 4).toISOString().split('T')[0]
   );
@@ -51,6 +84,7 @@ export const TeacherHomeworks: React.FC = () => {
   // Attachments State
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [customAttachName, setCustomAttachName] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
 
   // Rubric State
   const [enableRubric, setEnableRubric] = useState(true);
@@ -62,11 +96,41 @@ export const TeacherHomeworks: React.FC = () => {
 
   // Filtered Homeworks
   const filteredHomeworks = homeworks.filter(hw => {
-    if (selectedClassFilter !== 'all' && hw.targetClass !== selectedClassFilter && hw.targetClass !== 'Tüm Okul') {
-      return false;
-    }
-    return true;
+    if (selectedClassFilter === 'all') return true;
+    if (hw.targetClass === 'Tüm Okul') return true;
+    if (hw.targetClasses && hw.targetClasses.includes(selectedClassFilter)) return true;
+    if (hw.targetClass === selectedClassFilter) return true;
+    return false;
   });
+
+  // Handle File Upload (supports images and documents)
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsUploading(true);
+    Array.from(files).forEach(file => {
+      const isImg = file.type.startsWith('image/');
+      const reader = new FileReader();
+      reader.onload = () => {
+        const resultUrl = reader.result as string;
+        const newAtt: Attachment = {
+          id: `att-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+          name: file.name,
+          url: resultUrl,
+          size: file.size > 1024 * 1024 
+            ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` 
+            : `${Math.max(1, Math.round(file.size / 1024))} KB`,
+          type: isImg ? 'image' : 'pdf',
+          uploadedAt: new Date().toISOString()
+        };
+        setAttachments(prev => [...prev, newAtt]);
+        setIsUploading(false);
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  };
 
   const handleAddAttachment = () => {
     if (!customAttachName.trim()) return;
@@ -74,7 +138,7 @@ export const TeacherHomeworks: React.FC = () => {
       id: `att-${Date.now()}`,
       name: customAttachName.trim(),
       url: '#',
-      size: '2.4 MB',
+      size: '1.2 MB',
       type: 'pdf',
       uploadedAt: new Date().toISOString()
     };
@@ -82,9 +146,63 @@ export const TeacherHomeworks: React.FC = () => {
     setCustomAttachName('');
   };
 
+  // Class Selection Helpers
+  const handleToggleClass = (className: string) => {
+    if (className === 'Tüm Okul') {
+      setSelectedClasses(['Tüm Okul']);
+      return;
+    }
+    const withoutAll = selectedClasses.filter(c => c !== 'Tüm Okul');
+    if (withoutAll.includes(className)) {
+      const next = withoutAll.filter(c => c !== className);
+      setSelectedClasses(next.length === 0 ? ['Tüm Okul'] : next);
+    } else {
+      setSelectedClasses([...withoutAll, className]);
+    }
+  };
+
+  // Student Selection Helpers
+  const handleToggleStudent = (studentId: string) => {
+    if (selectedStudentIds.includes(studentId)) {
+      setSelectedStudentIds(selectedStudentIds.filter(id => id !== studentId));
+    } else {
+      setSelectedStudentIds([...selectedStudentIds, studentId]);
+    }
+  };
+
+  const handleSelectAllStudentsInFilter = (filteredList: UserProfile[]) => {
+    const ids = filteredList.map(s => s.uid);
+    const allSelected = ids.every(id => selectedStudentIds.includes(id));
+    if (allSelected) {
+      setSelectedStudentIds(selectedStudentIds.filter(id => !ids.includes(id)));
+    } else {
+      const newIds = Array.from(new Set([...selectedStudentIds, ...ids]));
+      setSelectedStudentIds(newIds);
+    }
+  };
+
   const handleCreateHomework = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !currentUser) return;
+
+    if (targetType === 'student' && selectedStudentIds.length === 0) {
+      alert('Lütfen ödevi atamak için en az bir öğrenci seçiniz.');
+      return;
+    }
+
+    let targetClassStr = 'Tüm Okul';
+    let targetClassesArray: string[] | undefined = undefined;
+
+    if (targetType === 'student') {
+      targetClassStr = `Özel (${selectedStudentIds.length} Öğrenci)`;
+    } else {
+      if (selectedClasses.includes('Tüm Okul') || selectedClasses.length === 0) {
+        targetClassStr = 'Tüm Okul';
+      } else {
+        targetClassStr = selectedClasses.join(', ');
+        targetClassesArray = selectedClasses;
+      }
+    }
 
     const newHw: Homework = {
       id: `hw-${Date.now()}`,
@@ -93,7 +211,10 @@ export const TeacherHomeworks: React.FC = () => {
       description: description.trim(),
       teacherId: currentUser.uid,
       teacherName: currentUser.displayName,
-      targetClass: targetClass,
+      targetType: targetType,
+      targetClass: targetClassStr,
+      targetClasses: targetClassesArray,
+      targetStudentIds: targetType === 'student' ? selectedStudentIds : undefined,
       dueDate: dueDate,
       dueTime: dueTime,
       maxScore: Number(maxScore) || 100,
@@ -108,6 +229,8 @@ export const TeacherHomeworks: React.FC = () => {
     setTitle('');
     setDescription('');
     setAttachments([]);
+    setSelectedStudentIds([]);
+    setSelectedClasses(['Tüm Okul']);
     
     try {
       confetti({ particleCount: 45, spread: 65 });
@@ -302,39 +425,219 @@ export const TeacherHomeworks: React.FC = () => {
                 />
               </div>
 
+              {/* Ders Adı & Konu */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                     Ders Adı <span className="text-rose-500">*</span>
                   </label>
-                  <input
-                    type="text"
-                    placeholder="Matematik"
-                    value={subject}
-                    onChange={(e) => setSubject(e.target.value)}
-                    required
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      list="subjects-list"
+                      placeholder="Örn: Matematik, Fizik..."
+                      value={subject}
+                      onChange={(e) => setSubject(e.target.value)}
+                      required
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    />
+                    <datalist id="subjects-list">
+                      {STANDARD_SUBJECTS.map(subj => (
+                        <option key={subj} value={subj} />
+                      ))}
+                    </datalist>
+                  </div>
                 </div>
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Hedef Sınıf / Şube <span className="text-rose-500">*</span>
+                    Başarı XP Ödülü
                   </label>
-                  <select
-                    value={targetClass}
-                    onChange={(e) => setTargetClass(e.target.value)}
+                  <input
+                    type="number"
+                    value={xpReward}
+                    onChange={(e) => setXpReward(Number(e.target.value))}
+                    min={10}
+                    max={200}
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                  >
-                    <option value="Tüm Okul">Tüm Okul</option>
-                    {classes.map(c => (
-                      <option key={c.id} value={c.name}>{c.name}</option>
-                    ))}
-                  </select>
+                  />
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* HEDEF SEÇİMİ: SINIFLAR VEYA ÖĞRENCİLER */}
+              <div className="p-4 rounded-2xl bg-indigo-50/40 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/60 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <label className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <School className="w-4 h-4 text-indigo-600" />
+                      Ödev Kime Verilecek? <span className="text-rose-500">*</span>
+                    </label>
+                    <p className="text-[11px] text-slate-500">
+                      Ödevi tüm okula, belirli şubelere veya doğrudan seçtiğiniz öğrencilere atayabilirsiniz.
+                    </p>
+                  </div>
+
+                  {/* Target Type Switcher */}
+                  <div className="flex items-center p-1 bg-slate-200/80 dark:bg-slate-800 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={() => setTargetType('class')}
+                      className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
+                        targetType === 'class'
+                          ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-white shadow-xs'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                      }`}
+                    >
+                      Sınıf / Şube Seç
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTargetType('student')}
+                      className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
+                        targetType === 'student'
+                          ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-white shadow-xs'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                      }`}
+                    >
+                      Öğrenci Seç ({selectedStudentIds.length})
+                    </button>
+                  </div>
+                </div>
+
+                {/* MODE A: CLASS SELECTION */}
+                {targetType === 'class' && (
+                  <div className="space-y-2 pt-1">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleClass('Tüm Okul')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
+                          selectedClasses.includes('Tüm Okul')
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                            : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        Tüm Okul
+                      </button>
+                      {classes.map(c => {
+                        const isSelected = selectedClasses.includes(c.name);
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => handleToggleClass(c.name)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
+                              isSelected
+                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                                : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50'
+                            }`}
+                          >
+                            {c.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="text-[11px] text-indigo-600 dark:text-indigo-400 font-medium">
+                      Seçilen Hedef: {selectedClasses.join(', ')}
+                    </div>
+                  </div>
+                )}
+
+                {/* MODE B: STUDENT SPECIFIC SELECTION */}
+                {targetType === 'student' && (
+                  <div className="space-y-3 pt-1">
+                    {/* Filters for students */}
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="text"
+                        placeholder="Öğrenci adı, soyadı veya okul no ile ara..."
+                        value={studentSearchQuery}
+                        onChange={(e) => setStudentSearchQuery(e.target.value)}
+                        className="flex-1 px-3 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                      />
+                      <select
+                        value={studentClassFilter}
+                        onChange={(e) => setStudentClassFilter(e.target.value)}
+                        className="px-3 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                      >
+                        <option value="all">Tüm Şubeler</option>
+                        {classes.map(c => (
+                          <option key={c.id} value={c.name}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Student List with Checkboxes */}
+                    {(() => {
+                      const filteredStudentsList = allStudents.filter(st => {
+                        const q = studentSearchQuery.toLowerCase();
+                        const matchQ = !q || st.displayName.toLowerCase().includes(q) || (st.schoolNumber && st.schoolNumber.includes(q));
+                        const matchC = studentClassFilter === 'all' || st.classGrade === studentClassFilter;
+                        return matchQ && matchC;
+                      });
+
+                      return (
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px] text-slate-500 px-1">
+                            <span>Gösterilen: {filteredStudentsList.length} öğrenci (Seçilen: {selectedStudentIds.length})</span>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectAllStudentsInFilter(filteredStudentsList)}
+                              className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+                            >
+                              Bu listedekilerin tümünü {filteredStudentsList.every(s => selectedStudentIds.includes(s.uid)) ? 'bırak' : 'seç'}
+                            </button>
+                          </div>
+
+                          <div className="max-h-40 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-2 divide-y divide-slate-100 dark:divide-slate-700/60">
+                            {filteredStudentsList.length === 0 ? (
+                              <div className="p-3 text-center text-xs text-slate-400">
+                                Kriterlere uygun öğrenci bulunamadı.
+                              </div>
+                            ) : (
+                              filteredStudentsList.map(st => {
+                                const isChecked = selectedStudentIds.includes(st.uid);
+                                return (
+                                  <label
+                                    key={st.uid}
+                                    className="flex items-center justify-between p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/40 cursor-pointer transition"
+                                  >
+                                    <div className="flex items-center gap-2.5">
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={() => handleToggleStudent(st.uid)}
+                                        className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                                      />
+                                      <div>
+                                        <div className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                                          {st.displayName}
+                                          {st.schoolNumber && (
+                                            <span className="text-[10px] text-slate-400 font-mono">#{st.schoolNumber}</span>
+                                          )}
+                                        </div>
+                                        <div className="text-[10px] text-slate-400">{st.classGrade || 'Sınıf belirtilmemiş'}</div>
+                                      </div>
+                                    </div>
+                                    {isChecked && (
+                                      <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950 px-2 py-0.5 rounded-full">
+                                        Seçildi
+                                      </span>
+                                    )}
+                                  </label>
+                                );
+                              })
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+
+              {/* TESLİM TARİHİ VE SAATİ */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                     Son Teslim Tarihi <span className="text-rose-500">*</span>
@@ -359,46 +662,52 @@ export const TeacherHomeworks: React.FC = () => {
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                   />
                 </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Başarı XP Ödülü
-                  </label>
-                  <input
-                    type="number"
-                    value={xpReward}
-                    onChange={(e) => setXpReward(Number(e.target.value))}
-                    min={10}
-                    max={200}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                  />
-                </div>
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Ödev Açıklaması ve Yönergeler
+                  Ödev Açıklaması ve Yönergeler <span className="text-rose-500">*</span>
                 </label>
                 <textarea
-                  rows={2}
-                  placeholder="Kitaptaki sayfa aralığı, soru numaraları veya inceleme detayları..."
+                  rows={3}
+                  placeholder="Ödev soruları, kitap sayfaları, dikkat edilecek hususlar veya inceleme detayları..."
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
+                  required
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
               </div>
 
-              {/* FILE ATTACHMENTS SECTION */}
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/60 space-y-2">
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                  <Paperclip className="w-3.5 h-3.5 text-indigo-500" />
-                  Ödev Ek Dosyaları (PDF / DOC)
-                </label>
-                
-                <div className="flex gap-2">
+              {/* FILE & IMAGE ATTACHMENTS SECTION */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/60 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                    <Paperclip className="w-3.5 h-3.5 text-indigo-500" />
+                    İsteğe Bağlı Görsel veya Dosya Ekle
+                  </label>
+                  <span className="text-[11px] text-slate-400">PDF, PNG, JPG, DOCX</span>
+                </div>
+
+                {/* Upload Button + File Input */}
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <label className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-dashed border-indigo-300 dark:border-indigo-700 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100/60 transition cursor-pointer text-xs font-bold">
+                    <UploadCloud className="w-4 h-4" />
+                    <span>Cihazdan Görsel veya Belge Yükle</span>
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/*,.pdf,.doc,.docx,.xlsx,.ppt,.pptx"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+
+                {/* Or manually add filename/url */}
+                <div className="flex gap-2 pt-1">
                   <input
                     type="text"
-                    placeholder="Dosya Adı (Örn: Parabol_Test_Sorulari.pdf)"
+                    placeholder="Veya dosya ismi yazın (Örn: Parabol_Test_Sorulari.pdf)"
                     value={customAttachName}
                     onChange={(e) => setCustomAttachName(e.target.value)}
                     className="flex-1 px-3 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
@@ -408,21 +717,47 @@ export const TeacherHomeworks: React.FC = () => {
                     onClick={handleAddAttachment}
                     className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold hover:bg-indigo-600 hover:text-white transition"
                   >
-                    Dosya Ekle
+                    Ekle
                   </button>
                 </div>
 
+                {/* Uploading indicator */}
+                {isUploading && (
+                  <div className="text-xs text-indigo-600 dark:text-indigo-400 animate-pulse font-medium">
+                    Dosya işleniyor...
+                  </div>
+                )}
+
+                {/* Attachment Previews */}
                 {attachments.length > 0 && (
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    {attachments.map((att, idx) => (
-                      <span key={idx} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300">
-                        <FileText className="w-3 h-3 text-indigo-500" />
-                        {att.name} ({att.size})
-                        <button type="button" onClick={() => setAttachments(attachments.filter((_, i) => i !== idx))} className="hover:text-rose-500 ml-1">
-                          <X className="w-3 h-3" />
-                        </button>
-                      </span>
-                    ))}
+                  <div className="space-y-2 pt-2">
+                    <div className="text-[11px] font-bold text-slate-500">Eklenen Dosyalar ({attachments.length}):</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {attachments.map((att, idx) => (
+                        <div key={idx} className="p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-2 text-xs">
+                          <div className="flex items-center gap-2 overflow-hidden">
+                            {att.type === 'image' && att.url && att.url.startsWith('data:') ? (
+                              <img src={att.url} alt={att.name} className="w-8 h-8 rounded-lg object-cover border shrink-0" />
+                            ) : att.type === 'image' ? (
+                              <ImageIcon className="w-4 h-4 text-emerald-500 shrink-0" />
+                            ) : (
+                              <FileText className="w-4 h-4 text-indigo-500 shrink-0" />
+                            )}
+                            <div className="truncate">
+                              <p className="font-bold text-slate-800 dark:text-slate-200 truncate">{att.name}</p>
+                              <p className="text-[10px] text-slate-400">{att.size}</p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setAttachments(attachments.filter((_, i) => i !== idx))}
+                            className="p-1 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950 transition"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>

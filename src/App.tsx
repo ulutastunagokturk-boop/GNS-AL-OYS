@@ -82,6 +82,9 @@ const MainContent: React.FC = () => {
       switch (activeTab) {
         case 'schedule': return 'Haftalık Ders Programı Dağılımı & Çizelge';
         case 'overview': return 'Okul İstatistikleri & Özet';
+        case 'homeworks': return 'Ödev Yönetimi & Takip (Yönetici Paneli)';
+        case 'grades': return 'Sınav & Deneme Notu Girişi (Yönetici Paneli)';
+        case 'announcements': return 'Okul ve Sınıf Duyuru Yönetimi (Yönetici Paneli)';
         case 'users': return 'Kullanıcı & Rol Yönetimi';
         case 'parents': return 'Veli Yönetimi & Excel Toplu Aktarım';
         case 'roles': return 'Firestore Rol & Yetki Atamaları';
@@ -153,10 +156,17 @@ const MainContent: React.FC = () => {
                     />
                   )}
                   {currentUser.role === 'admin' && (
-                    <AdminDashboard 
-                      activeTab={activeTab} 
-                      onTabChange={(tab) => setActiveTab(tab)} 
-                    />
+                    ['homeworks', 'grades', 'announcements', 'attendance', 'students'].includes(activeTab) ? (
+                      <TeacherDashboard 
+                        activeTab={activeTab} 
+                        onTabChange={(tab) => setActiveTab(tab)} 
+                      />
+                    ) : (
+                      <AdminDashboard 
+                        activeTab={activeTab} 
+                        onTabChange={(tab) => setActiveTab(tab)} 
+                      />
+                    )
                   )}
                 </>
               )}

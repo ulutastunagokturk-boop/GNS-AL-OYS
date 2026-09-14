@@ -18,6 +18,7 @@ import {
   MapPin, 
   User, 
   Printer, 
+  FileDown,
   Sparkles, 
   Filter, 
   Layers, 
@@ -182,8 +183,8 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
       className: filterMode === 'class' ? selectedClass : '10-A',
       day: day || selectedDay || 'monday',
       period: defaultPeriod,
-      startTime: periodInfo?.startTime || '08:30',
-      endTime: periodInfo?.endTime || '09:10',
+      startTime: periodInfo?.startTime || '08:50',
+      endTime: periodInfo?.endTime || '09:30',
       subject: 'Matematik',
       teacherName: currentUser?.role === 'teacher' ? currentUser.displayName : (teachers[0]?.displayName || 'Ders Öğretmeni'),
       classroom: 'Derslik 101',
@@ -310,6 +311,16 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
                 </button>
               </>
             )}
+
+            <button
+              id="download-schedule-pdf-banner-btn"
+              onClick={() => setIsPrintModalOpen(true)}
+              className="px-4 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-2 shadow-lg shadow-emerald-600/30 cursor-pointer active:scale-95"
+              title="Okul idaresi saatleriyle haftalık ders programını PDF olarak indir"
+            >
+              <FileDown className="w-4 h-4" />
+              PDF Olarak İndir
+            </button>
 
             <button
               onClick={() => setIsPrintModalOpen(true)}
@@ -508,6 +519,17 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
               </select>
             )}
 
+            {/* Download PDF Button in control bar */}
+            <button
+              id="download-schedule-pdf-toolbar-btn"
+              onClick={() => setIsPrintModalOpen(true)}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200 dark:border-emerald-800 transition flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
+              title="Okul idaresi saatleriyle haftalık ders programını PDF olarak indir veya yazdır"
+            >
+              <FileDown className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+              <span>PDF İndir</span>
+            </button>
+
             {/* Quick Add Button in control bar */}
             {isAdminOrTeacher && (
               <button
@@ -697,13 +719,13 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
 
                       </tr>
 
-                      {/* Lunch Break Row after 4th period */}
+                      {/* Lunch Break Row after 5th period */}
                       {period.isLunchAfter && (
                         <tr className="bg-amber-50/60 dark:bg-amber-950/20 border-y border-amber-200/60 dark:border-amber-900/40">
                           <td colSpan={6} className="py-2.5 px-4 text-center">
                             <div className="flex items-center justify-center gap-2 text-xs font-bold text-amber-900 dark:text-amber-300">
                               <span>🍽️</span>
-                              <span>11:40 - 12:30 ÖĞLE ARASI & DİNLENME (50 DAKİKA)</span>
+                              <span>12:50 - 13:30 ÖĞLE ARASI DİNLENME VE YEMEK TATİLİ (40 DAKİKA)</span>
                             </div>
                           </td>
                         </tr>
@@ -903,7 +925,7 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
               Gaziemir Nevvar Salih İşgören Anadolu Lisesi Zil & Ders Saatleri
             </h2>
             <p className="text-xs sm:text-sm text-slate-500">
-              Dersler 40 dakika, teneffüsler 10 dakika, öğle arası 50 dakikadır.
+              Dersler 40 dakika, teneffüsler 10 dakika (7. ders sonrası 5 dk), öğle arası 40 dakikadır (12:50 - 13:30). Giriş: 08:50, Çıkış: 15:45.
             </p>
           </div>
 
@@ -935,7 +957,7 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
 
           <div className="p-4 bg-indigo-50 dark:bg-indigo-950/40 rounded-2xl border border-indigo-200 dark:border-indigo-800 text-xs text-indigo-900 dark:text-indigo-200 flex items-center gap-2">
             <Info className="w-4 h-4 text-indigo-600 shrink-0" />
-            <span>Öğrencilerin ilk ders başlamadan en geç 08:25'te okul bahçesinde ve dersliklerinde hazır olmaları gerekmektedir.</span>
+            <span>Öğrencilerin ilk ders başlamadan en geç 08:45'te okul bahçesinde ve dersliklerinde hazır olmaları gerekmektedir.</span>
           </div>
         </div>
       )}

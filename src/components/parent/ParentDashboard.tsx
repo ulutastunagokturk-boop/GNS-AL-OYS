@@ -22,7 +22,10 @@ import {
   Phone,
   Mail,
   ChevronRight,
-  TrendingUp
+  TrendingUp,
+  Paperclip,
+  Download,
+  ExternalLink
 } from 'lucide-react';
 
 interface ParentDashboardProps {
@@ -61,9 +64,11 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   // Specific data for the active child
   const grades: GradeRecord[] = activeChild ? dataService.getGradesForStudent(activeChild.uid) : [];
   const attendanceRecords: AttendanceRecord[] = activeChild ? dataService.getAttendanceForStudent(activeChild.uid) : [];
-  const homeworks: Homework[] = activeChild?.classGrade ? dataService.getHomeworksForStudent(activeChild.classGrade) : [];
+  const homeworks: Homework[] = activeChild ? dataService.getHomeworksForStudent(activeChild.classGrade, activeChild.uid) : [];
   const submissions: HomeworkSubmission[] = activeChild ? dataService.getSubmissionsForStudent(activeChild.uid) : [];
-  const announcements: Announcement[] = dataService.getAnnouncements();
+  const announcements: Announcement[] = activeChild?.classGrade 
+    ? dataService.getAnnouncementsForStudent(activeChild.classGrade) 
+    : dataService.getAnnouncementsForParent(myChildren.map(c => c.classGrade).filter(Boolean) as string[]);
 
   // Academic calculations
   const gpa = grades.length > 0
@@ -555,8 +560,29 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                             </span>
                             <h4 className="font-bold text-sm text-slate-900 dark:text-white">{hw.title}</h4>
                           </div>
-                          <p className="text-xs text-slate-500 line-clamp-1">{hw.description}</p>
-                          <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                          <p className="text-xs text-slate-500">{hw.description}</p>
+                          
+                          {/* Attachments if any */}
+                          {hw.attachments && hw.attachments.length > 0 && (
+                            <div className="pt-1 flex flex-wrap gap-2">
+                              {hw.attachments.map(att => (
+                                <a
+                                  key={att.id}
+                                  href={att.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  download={att.name}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 transition border border-indigo-200/50 dark:border-indigo-800/50"
+                                >
+                                  <Paperclip className="w-3.5 h-3.5" />
+                                  <span className="font-semibold max-w-[180px] truncate">{att.name}</span>
+                                  {att.size && <span className="text-[10px] text-indigo-400">({att.size})</span>}
+                                </a>
+                              ))}
+                            </div>
+                          )}
+
+                          <div className="flex items-center gap-3 text-[11px] text-slate-400 pt-1">
                             <span>Öğretmen: <strong>{hw.teacherName}</strong></span>
                             <span>&bull;</span>
                             <span>Son Teslim: <strong>{hw.dueDate} {hw.dueTime || ''}</strong></span>

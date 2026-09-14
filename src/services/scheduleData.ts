@@ -4,65 +4,65 @@ export const CLASS_PERIODS: ClassPeriodInfo[] = [
   {
     period: 1,
     label: '1. Ders',
-    startTime: '08:30',
-    endTime: '09:10',
+    startTime: '08:50',
+    endTime: '09:30',
     breakDurationMin: 10,
     breakLabel: '10 dk Teneffüs'
   },
   {
     period: 2,
     label: '2. Ders',
-    startTime: '09:20',
-    endTime: '10:00',
+    startTime: '09:40',
+    endTime: '10:20',
     breakDurationMin: 10,
     breakLabel: '10 dk Teneffüs'
   },
   {
     period: 3,
     label: '3. Ders',
-    startTime: '10:10',
-    endTime: '10:50',
+    startTime: '10:30',
+    endTime: '11:10',
     breakDurationMin: 10,
     breakLabel: '10 dk Teneffüs'
   },
   {
     period: 4,
     label: '4. Ders',
-    startTime: '11:00',
-    endTime: '11:40',
-    breakDurationMin: 50,
-    breakLabel: '50 dk Öğle Arası',
-    isLunchAfter: true
-  },
-  {
-    period: 5,
-    label: '5. Ders',
-    startTime: '12:30',
-    endTime: '13:10',
+    startTime: '11:20',
+    endTime: '12:00',
     breakDurationMin: 10,
     breakLabel: '10 dk Teneffüs'
   },
   {
+    period: 5,
+    label: '5. Ders',
+    startTime: '12:10',
+    endTime: '12:50',
+    breakDurationMin: 40,
+    breakLabel: '40 dk Öğle Arası',
+    isLunchAfter: true
+  },
+  {
     period: 6,
     label: '6. Ders',
-    startTime: '13:20',
-    endTime: '14:00',
+    startTime: '13:30',
+    endTime: '14:10',
     breakDurationMin: 10,
     breakLabel: '10 dk Teneffüs'
   },
   {
     period: 7,
     label: '7. Ders',
-    startTime: '14:10',
-    endTime: '14:50',
-    breakDurationMin: 10,
-    breakLabel: '10 dk Teneffüs'
+    startTime: '14:20',
+    endTime: '15:00',
+    breakDurationMin: 5,
+    breakLabel: '5 dk Teneffüs'
   },
   {
     period: 8,
     label: '8. Ders',
-    startTime: '15:00',
-    endTime: '15:40',
+    startTime: '15:05',
+    endTime: '15:45',
     breakDurationMin: 0,
     breakLabel: 'Ders Çıkışı'
   }
@@ -240,7 +240,7 @@ export function getCurrentClassStatus(slots: WeeklyScheduleSlot[], targetClassNa
       nextPeriod: null,
       nextSlot: null,
       statusText: 'Hafta Sonu Tatili',
-      subStatusText: 'İyi dinlenmeler! Pazartesi günü dersler saat 08:30\'da başlıyor.',
+      subStatusText: 'İyi dinlenmeler! Pazartesi günü dersler saat 08:50\'de başlıyor.',
       minutesRemainingInCurrent: 0,
       progressPercent: 0,
       isBreakNow: false
@@ -251,9 +251,9 @@ export function getCurrentClassStatus(slots: WeeklyScheduleSlot[], targetClassNa
   const dayLabel = dayLabelMap[todayKey];
   const todaySlots = slots.filter(s => s.day === todayKey && s.className.toLowerCase() === targetClassName.toLowerCase());
 
-  // School start: 08:30 (510 min), School end: 15:40 (940 min)
-  const schoolStartMinutes = 8 * 60 + 30;
-  const schoolEndMinutes = 15 * 60 + 40;
+  // School start: 08:50 (530 min), School end: 15:45 (945 min)
+  const schoolStartMinutes = 8 * 60 + 50;
+  const schoolEndMinutes = 15 * 60 + 45;
 
   if (currentMinutes < schoolStartMinutes) {
     const minUntilStart = schoolStartMinutes - currentMinutes;
@@ -269,7 +269,7 @@ export function getCurrentClassStatus(slots: WeeklyScheduleSlot[], targetClassNa
       nextPeriod: firstPeriod,
       nextSlot: firstSlot,
       statusText: 'Dersler Henüz Başlamadı',
-      subStatusText: `1. Ders (${firstSlot ? firstSlot.subject : 'Başlangıç'}) ${minUntilStart} dakika sonra (08:30) başlayacak.`,
+      subStatusText: `1. Ders (${firstSlot ? firstSlot.subject : 'Başlangıç'}) ${minUntilStart} dakika sonra (08:50) başlayacak.`,
       minutesRemainingInCurrent: minUntilStart,
       progressPercent: 0,
       isBreakNow: false

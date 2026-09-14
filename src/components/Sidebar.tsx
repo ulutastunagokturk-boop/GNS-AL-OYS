@@ -230,6 +230,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
           icon: BarChart3 
         },
         { 
+          id: 'homeworks', 
+          label: 'Ödev Yönetimi', 
+          sublabel: `${homeworks.length} Aktif Ödev`, 
+          icon: BookOpen,
+          badge: `${homeworks.length}`,
+          badgeColor: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300'
+        },
+        { 
+          id: 'grades', 
+          label: 'Sınav & Not Girişi', 
+          sublabel: 'Öğrenci Not Yönetimi', 
+          icon: Award 
+        },
+        { 
+          id: 'announcements', 
+          label: 'Duyuru Yönetimi', 
+          sublabel: 'Sınıf & Okul Duyurusu', 
+          icon: Megaphone 
+        },
+        { 
           id: 'users', 
           label: 'Kullanıcı Yönetimi', 
           sublabel: `${users.length} Kayıtlı Kullanıcı`, 
