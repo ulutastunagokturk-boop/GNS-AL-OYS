@@ -698,8 +698,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
           }`}
         >
-          <Calendar className="w-4 h-4" />
-          Ders Programı Düzenleme & Çizelge
+          <Clock className="w-4 h-4" />
+          Ders Saatleri Çizelgesi
         </button>
 
         <button

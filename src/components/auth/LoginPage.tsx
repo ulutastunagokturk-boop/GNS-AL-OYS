@@ -429,14 +429,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
             <div className="p-5 rounded-3xl bg-linear-to-br from-indigo-500/10 via-purple-500/5 to-slate-100 dark:from-indigo-950/40 dark:via-purple-950/20 dark:to-slate-900/60 border border-indigo-200/80 dark:border-indigo-800/60 shadow-lg space-y-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs">
-                  <Calendar className="w-4 h-4" />
+                  <Clock className="w-4 h-4" />
                 </div>
                 <div>
                   <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
-                    Haftalık Ders Çizelgesi
+                    Günlük Ders & Zil Saatleri
                   </h4>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Giriş yapmadan tüm sınıf ve öğretmen programlarını görün
+                    08:50 - 15:45 ders saatleri ve teneffüs çizelgesini görüntüleyin
                   </p>
                 </div>
               </div>
@@ -447,7 +447,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
                 onClick={onViewSchedule}
                 className="w-full py-2.5 px-4 rounded-xl bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-slate-700 text-xs font-bold border border-indigo-200 dark:border-indigo-700/60 transition flex items-center justify-center gap-2 cursor-pointer shadow-xs"
               >
-                <span>Ders Programını Görüntüle</span>
+                <span>Ders Saatlerini Görüntüle</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>

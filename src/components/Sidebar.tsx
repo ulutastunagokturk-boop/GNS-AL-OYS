@@ -18,6 +18,7 @@ import {
   Sparkles,
   Layers,
   Calendar,
+  Clock,
   Settings,
   Trophy,
   Cpu,
@@ -53,7 +54,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (!currentUser) {
       return [
         { id: 'portal-home', label: 'Portal Ana Sayfa', icon: School, badge: `${users.length} Kullanıcı` },
-        { id: 'schedule', label: 'Haftalık Program', sublabel: 'Ders & Zil Saatleri', icon: Calendar, badge: '40 Saat' },
+        { id: 'schedule', label: 'Ders Saatleri', sublabel: '08:50 - 15:45 (8 Ders)', icon: Clock, badge: '8 Ders' },
         { id: 'features', label: 'Sistem Özellikleri', icon: Sparkles }
       ];
     }
@@ -62,11 +63,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       return [
         { 
           id: 'schedule', 
-          label: 'Haftalık Program', 
-          sublabel: 'Ders & Nöbet Çizelgesi', 
-          icon: Calendar, 
-          badge: 'MEB',
-          badgeColor: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+          label: 'Ders Saatleri', 
+          sublabel: 'Zil & Zaman Çizelgesi', 
+          icon: Clock, 
+          badge: '8 Ders',
+          badgeColor: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300'
         },
         { 
           id: 'homeworks', 
@@ -124,11 +125,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       return [
         { 
           id: 'schedule', 
-          label: 'Haftalık Program', 
-          sublabel: 'Ders & Zil Çizelgesi', 
-          icon: Calendar, 
-          badge: currentUser.classGrade || 'Program',
-          badgeColor: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+          label: 'Ders Saatleri', 
+          sublabel: 'Zil & Ders Saatleri', 
+          icon: Clock, 
+          badge: '08:50',
+          badgeColor: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
         },
         { 
           id: 'homeworks', 
@@ -199,9 +200,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         },
         {
           id: 'schedule',
-          label: 'Haftalık Ders Programı',
-          sublabel: 'Ders Saatleri',
-          icon: Calendar
+          label: 'Ders Saatleri',
+          sublabel: 'Giriş & Çıkış Vakitleri',
+          icon: Clock
         },
         {
           id: 'announcements',
@@ -217,11 +218,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       return [
         { 
           id: 'schedule', 
-          label: 'Haftalık Program', 
-          sublabel: 'Ders Dağılım & Nöbet', 
-          icon: Calendar, 
-          badge: 'MEB',
-          badgeColor: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+          label: 'Ders Saatleri', 
+          sublabel: 'Zil & Zaman Çizelgesi', 
+          icon: Clock, 
+          badge: '8 Ders',
+          badgeColor: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300'
         },
         { 
           id: 'overview', 

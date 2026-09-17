@@ -52,12 +52,12 @@ const MainContent: React.FC = () => {
   // Section title calculation
   const getSectionTitle = () => {
     if (!currentUser) {
-      if (activeTab === 'schedule') return 'Haftalık Ders Programı & Çizelge';
+      if (activeTab === 'schedule') return 'Ders ve Zil Saatleri Çizelgesi';
       return undefined;
     }
     if (currentUser.role === 'teacher') {
       switch (activeTab) {
-        case 'schedule': return 'Haftalık Ders Programı & Nöbet Çizelgesi';
+        case 'schedule': return 'Ders ve Zil Saatleri Çizelgesi';
         case 'homeworks': return 'Ödev Yönetimi & Takip Raporu';
         case 'grades': return 'Sınav & Deneme Notu Girişi';
         case 'attendance': return 'E-Yoklama & Devamsızlık Takibi';
@@ -69,7 +69,7 @@ const MainContent: React.FC = () => {
     }
     if (currentUser.role === 'student') {
       switch (activeTab) {
-        case 'schedule': return 'Haftalık Ders Programı & Zil Çizelgesi';
+        case 'schedule': return 'Ders ve Zil Saatleri';
         case 'homeworks': return 'Ödevlerim & Teslim Modülü';
         case 'grades': return 'Sınav & Deneme Notlarım';
         case 'attendance': return 'Devamsızlık Durumum & Yoklama';
@@ -80,7 +80,7 @@ const MainContent: React.FC = () => {
     }
     if (currentUser.role === 'admin') {
       switch (activeTab) {
-        case 'schedule': return 'Haftalık Ders Programı Dağılımı & Çizelge';
+        case 'schedule': return 'Ders ve Zil Saatleri Çizelgesi';
         case 'overview': return 'Okul İstatistikleri & Özet';
         case 'homeworks': return 'Ödev Yönetimi & Takip (Yönetici Paneli)';
         case 'grades': return 'Sınav & Deneme Notu Girişi (Yönetici Paneli)';
