@@ -169,6 +169,9 @@ export interface SchoolClass {
   name: string;
   gradeLevel: number;
   branch: string;
+  section?: string;
+  academicYear?: string;
+  studentCount?: number;
   advisorTeacher?: string;
   capacity?: number;
 }

@@ -112,6 +112,14 @@ export function sanitizeForFirestore<T>(data: T): T {
   return data;
 }
 
+/**
+ * Normalizes class names across formats: '9/D', '9-D', '9 d' -> '9-D'
+ */
+export function normalizeClassName(className?: string): string {
+  if (!className) return '';
+  return className.trim().toUpperCase().replace(/[\/\\]/g, '-').replace(/\s+/g, '-');
+}
+
 const CACHE_STORAGE_KEY = 'gnisal_oys_v13_clean_slate';
 
 export interface LocalCacheStore {
@@ -237,8 +245,8 @@ class DataService {
     const initialStore: LocalCacheStore = {
       users: allUsers,
       roleAssignments: initialRoleAssignments,
-      announcements: [],
-      homeworks: [],
+      announcements: INITIAL_ANNOUNCEMENTS,
+      homeworks: INITIAL_HOMEWORKS,
       submissions: [],
       grades: [],
       attendance: [],
@@ -267,9 +275,9 @@ class DataService {
     }
     this.notifySubscribers();
 
-    // Supabase İkincil Bulut Yedeklemesi (Arka Plan Asenkron Çalışan)
+    // Supabase Birincil Bulut Veritabanı (Arka Plan Asenkron Eşitleme)
     try {
-      supabaseBackupService.scheduleAutoBackup(store);
+      supabaseBackupService.scheduleAutoBackup(store, 1000);
     } catch (err) {
       console.warn('[DataService] Failed to schedule auto backup to Supabase:', err);
     }
@@ -296,16 +304,19 @@ class DataService {
 
   private async initData() {
     try {
-      // 1. First sync from live Supabase PostgreSQL database tables and backups
+      // 1. First sync from live Supabase PostgreSQL database tables and backups (Primary)
       await this.syncFromSupabaseDatabase();
 
-      // 2. Setup Firestore listeners & sync
+      // 2. Ensure default starter data exists if empty
+      this.ensureStarterDataIfEmpty();
+
+      // 3. Setup Firestore listeners & sync as backup
       this.setupFirestoreListeners();
       await this.syncUsersFromFirestore();
       await this.seedInitialAdminIfMissing();
       await this.seedInitialClassesAndSchedulesIfMissing();
 
-      // 3. Ensure live relational database has current classes and users
+      // 4. Ensure live relational database has current classes and users
       await this.seedSupabaseIfEmpty();
 
       this.isInitialized = true;
@@ -417,6 +428,78 @@ class DataService {
       if (!silent) console.warn('[DataService] syncFromSupabaseDatabase note:', e);
     }
     return false;
+  }
+
+  private ensureStarterDataIfEmpty() {
+    let changed = false;
+
+    // 1. Classes: ensure 9-D and initial classes exist
+    if (!this.cache.classes || this.cache.classes.length === 0) {
+      this.cache.classes = [...INITIAL_CLASSES];
+      changed = true;
+    } else {
+      const has9D = this.cache.classes.some(c => normalizeClassName(c.name) === '9-D');
+      if (!has9D) {
+        this.cache.classes.unshift({
+          id: 'class-9-d',
+          name: '9-D',
+          gradeLevel: 9,
+          branch: 'D',
+          section: 'D',
+          academicYear: '2026-2027',
+          studentCount: 22
+        });
+        changed = true;
+      }
+    }
+
+    // 2. Announcements
+    if ((!this.cache.announcements || this.cache.announcements.length === 0) && INITIAL_ANNOUNCEMENTS.length > 0) {
+      this.cache.announcements = [...INITIAL_ANNOUNCEMENTS];
+      changed = true;
+    }
+
+    // 3. Homeworks
+    if ((!this.cache.homeworks || this.cache.homeworks.length === 0) && INITIAL_HOMEWORKS.length > 0) {
+      this.cache.homeworks = [...INITIAL_HOMEWORKS];
+      changed = true;
+    }
+
+    // 4. Grades
+    if (!this.cache.grades || this.cache.grades.length === 0) {
+      const students = this.getStudents();
+      if (students.length > 0) {
+        const seedGrades: GradeRecord[] = [];
+        const subjects = ['Matematik', 'Türk Dili ve Edebiyatı', 'Fizik'];
+        students.forEach((st, idx) => {
+          subjects.forEach((subj, subIdx) => {
+            const baseScore = 75 + ((idx * 7 + subIdx * 11) % 23);
+            seedGrades.push({
+              id: `grade-${st.uid}-${subj}-Yazili1`,
+              studentId: st.uid,
+              studentName: st.displayName,
+              studentNumber: st.schoolNumber || '',
+              studentClass: st.classGrade || '9-D',
+              subject: subj,
+              examType: 'Yazılı 1',
+              score: baseScore,
+              maxScore: 100,
+              examDate: '2026-09-18',
+              teacherId: 'admin-tlogix',
+              teacherName: 'Zümre Öğretmeni',
+              notes: '1. Dönem 1. Yazılı Sınav Değerlendirmesi',
+              createdAt: '2026-09-18T10:00:00.000Z'
+            });
+          });
+        });
+        this.cache.grades = seedGrades;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.saveCache(this.cache);
+    }
   }
 
   private async seedSupabaseIfEmpty() {
@@ -851,7 +934,12 @@ class DataService {
   }
 
   public getStudentsByClass(className: string): UserProfile[] {
-    return this.cache.users.filter(u => u.role === 'student' && u.classGrade === className && u.status !== 'deactivated');
+    const targetNorm = normalizeClassName(className);
+    return this.cache.users.filter(u => 
+      u.role === 'student' && 
+      u.status !== 'deactivated' &&
+      (u.classGrade === className || normalizeClassName(u.classGrade) === targetNorm)
+    );
   }
 
   public getUserById(uid: string): UserProfile | undefined {
@@ -1898,17 +1986,50 @@ class DataService {
 
   // ================= CLASSES =================
   public getClasses(): SchoolClass[] {
-    return this.cache.classes;
+    const list = [...this.cache.classes];
+    // Guarantee that any class present in active students (such as '9-D', '9/D') is always represented
+    const studentClasses = new Set<string>();
+    this.cache.users.forEach(u => {
+      if (u.role === 'student' && u.classGrade && u.status !== 'deactivated') {
+        studentClasses.add(u.classGrade);
+      }
+    });
+
+    studentClasses.forEach(stCls => {
+      const norm = normalizeClassName(stCls);
+      const exists = list.some(c => normalizeClassName(c.name) === norm);
+      if (!exists) {
+        const gradeMatch = stCls.match(/(\d+)/);
+        const secMatch = stCls.match(/[A-Za-zÇĞİÖŞÜçğıöşü]/g);
+        const gradeLevel = gradeMatch ? parseInt(gradeMatch[1], 10) : 9;
+        const section = secMatch && secMatch.length > 0 ? secMatch[secMatch.length - 1].toUpperCase() : 'D';
+        const displayName = `${gradeLevel}-${section}`;
+        list.push({
+          id: `class-${norm.toLowerCase()}`,
+          name: displayName,
+          gradeLevel,
+          branch: section,
+          section,
+          academicYear: '2026-2027',
+          studentCount: this.getStudentsByClass(stCls).length
+        });
+      }
+    });
+
+    return list.sort((a, b) => {
+      if (a.gradeLevel !== b.gradeLevel) return a.gradeLevel - b.gradeLevel;
+      return a.name.localeCompare(b.name);
+    });
   }
 
   public getClassById(id: string): SchoolClass | undefined {
-    return this.cache.classes.find(c => c.id === id);
+    return this.getClasses().find(c => c.id === id);
   }
 
   public getClassByName(name: string): SchoolClass | undefined {
     if (!name) return undefined;
-    const clean = name.toLowerCase();
-    return this.cache.classes.find(c => (c.name || '').toLowerCase() === clean);
+    const targetNorm = normalizeClassName(name);
+    return this.getClasses().find(c => normalizeClassName(c.name) === targetNorm || (c.name || '').toLowerCase() === name.toLowerCase());
   }
 
   public async addClass(newClass: SchoolClass, adminName: string = 'Okul Yönetimi'): Promise<SchoolClass> {
@@ -1993,7 +2114,7 @@ class DataService {
   }
 
   public getHomeworksForStudent(studentClass?: string, studentId?: string): Homework[] {
-    const cleanClass = studentClass ? studentClass.trim().toUpperCase() : '';
+    const cleanNorm = normalizeClassName(studentClass);
     return this.cache.homeworks.filter(hw => {
       // 1. If assigned specifically to selected students
       if (hw.targetType === 'student' || (hw.targetStudentIds && hw.targetStudentIds.length > 0)) {
@@ -2001,17 +2122,19 @@ class DataService {
         return hw.targetStudentIds?.includes(studentId);
       }
 
-      // 2. If assigned to multiple classes
-      if (hw.targetClasses && hw.targetClasses.length > 0) {
-        if (!cleanClass) return false;
-        return hw.targetClasses.some(c => c.trim().toUpperCase() === cleanClass);
-      }
-
-      // 3. All School
+      // 2. All School
       if (hw.targetClass === 'Tüm Okul') return true;
 
+      // 3. If assigned to multiple classes
+      if (hw.targetClasses && hw.targetClasses.length > 0) {
+        if (!cleanNorm) return false;
+        return hw.targetClasses.some(c => c === 'Tüm Okul' || normalizeClassName(c) === cleanNorm);
+      }
+
       // 4. Single Class match
-      if (cleanClass && hw.targetClass && hw.targetClass.trim().toUpperCase() === cleanClass) return true;
+      if (cleanNorm && hw.targetClass) {
+        if (normalizeClassName(hw.targetClass) === cleanNorm) return true;
+      }
 
       return false;
     });
@@ -2030,7 +2153,7 @@ class DataService {
       targetStudents = this.getStudents().filter(st => homework.targetStudentIds?.includes(st.uid));
     } else if (homework.targetClasses && homework.targetClasses.length > 0) {
       targetStudents = this.getStudents().filter(st => 
-        st.classGrade && homework.targetClasses?.some(tc => tc.trim().toUpperCase() === st.classGrade?.trim().toUpperCase())
+        st.classGrade && homework.targetClasses?.some(tc => tc === 'Tüm Okul' || normalizeClassName(tc) === normalizeClassName(st.classGrade))
       );
     } else if (homework.targetClass === 'Tüm Okul') {
       targetStudents = this.getStudents();
@@ -2270,8 +2393,9 @@ class DataService {
   }
 
   public getGradesByClassAndSubject(className: string, subject?: string, examType?: string): GradeRecord[] {
+    const targetNorm = normalizeClassName(className);
     return this.cache.grades.filter(g => {
-      const matchClass = g.studentClass === className;
+      const matchClass = g.studentClass === className || normalizeClassName(g.studentClass) === targetNorm;
       const matchSubj = !subject || g.subject === subject;
       const matchType = !examType || g.examType === examType;
       return matchClass && matchSubj && matchType;
@@ -2331,9 +2455,50 @@ class DataService {
   }
 
   public async saveBatchGrades(gradesList: GradeRecord[]): Promise<void> {
-    for (const g of gradesList) {
-      await this.saveGrade(g);
+    if (!gradesList || gradesList.length === 0) return;
+
+    let updatedGrades = [...this.cache.grades];
+    const newNotifs: NotificationItem[] = [];
+
+    for (const grade of gradesList) {
+      const existingIndex = updatedGrades.findIndex(g => 
+        g.studentId === grade.studentId && 
+        g.subject === grade.subject && 
+        g.examType === grade.examType
+      );
+
+      if (existingIndex >= 0) {
+        updatedGrades[existingIndex] = grade;
+      } else {
+        updatedGrades = [grade, ...updatedGrades];
+      }
+
+      newNotifs.push({
+        id: `notif-grade-${Date.now()}-${grade.studentId}`,
+        userId: grade.studentId,
+        title: `Yeni Sınav Notu: ${grade.subject}`,
+        message: `${grade.teacherName} (Öğretmen) tarafından ${grade.examType} notunuz girildi: ${grade.score} / ${grade.maxScore}`,
+        type: 'grade',
+        read: false,
+        createdAt: new Date().toISOString(),
+        linkTab: 'grades',
+        actorName: grade.teacherName,
+        actorRole: 'teacher'
+      });
     }
+
+    this.saveCache({
+      ...this.cache,
+      grades: updatedGrades,
+      notifications: [...newNotifs, ...this.cache.notifications]
+    });
+
+    // Mirror to Firebase backup in background
+    gradesList.forEach(g => {
+      setDoc(doc(db, 'grades', g.id), sanitizeForFirestore(g)).catch(e => {
+        console.log('Firebase backup save grade note:', e);
+      });
+    });
   }
 
   // ================= ATTENDANCE (DEVAMSIZLIK TAKİBİ) =================
@@ -2398,15 +2563,15 @@ class DataService {
 
   public getAnnouncementsForStudent(studentClass?: string): Announcement[] {
     const all = this.getAnnouncements();
-    const cleanClass = studentClass ? studentClass.trim().toUpperCase() : '';
+    const cleanNorm = normalizeClassName(studentClass);
     return all.filter(a => {
       // Teachers only announcements are never shown to students/parents
       if (a.targetAudience === 'teachers') return false;
       if (a.targetAudience === 'all' || a.targetAudience === 'students') return true;
       if (a.targetAudience === 'class') {
-        if (!cleanClass) return false;
-        if (a.targetClasses && a.targetClasses.some(c => c.trim().toUpperCase() === cleanClass)) return true;
-        if (a.targetClass && (a.targetClass === 'Tüm Okul' || a.targetClass.trim().toUpperCase() === cleanClass)) return true;
+        if (!cleanNorm) return false;
+        if (a.targetClasses && a.targetClasses.some(c => c === 'Tüm Okul' || normalizeClassName(c) === cleanNorm)) return true;
+        if (a.targetClass && (a.targetClass === 'Tüm Okul' || normalizeClassName(a.targetClass) === cleanNorm)) return true;
       }
       return false;
     });
@@ -2414,15 +2579,15 @@ class DataService {
 
   public getAnnouncementsForParent(childrenClasses: string[]): Announcement[] {
     const all = this.getAnnouncements();
-    const cleanClasses = (childrenClasses || []).map(c => c.trim().toUpperCase());
+    const normalizedClasses = (childrenClasses || []).map(c => normalizeClassName(c)).filter(Boolean);
     return all.filter(a => {
       // Teachers only announcements are never shown to students/parents
       if (a.targetAudience === 'teachers') return false;
       if (a.targetAudience === 'all' || a.targetAudience === 'students') return true;
       if (a.targetAudience === 'class') {
-        if (cleanClasses.length === 0) return false;
-        if (a.targetClasses && a.targetClasses.some(c => cleanClasses.includes(c.trim().toUpperCase()))) return true;
-        if (a.targetClass && (a.targetClass === 'Tüm Okul' || cleanClasses.includes(a.targetClass.trim().toUpperCase()))) return true;
+        if (normalizedClasses.length === 0) return false;
+        if (a.targetClasses && a.targetClasses.some(c => c === 'Tüm Okul' || normalizedClasses.includes(normalizeClassName(c)))) return true;
+        if (a.targetClass && (a.targetClass === 'Tüm Okul' || normalizedClasses.includes(normalizeClassName(a.targetClass)))) return true;
       }
       return false;
     });

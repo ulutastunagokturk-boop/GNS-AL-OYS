@@ -89,7 +89,6 @@ const MainContent: React.FC = () => {
         case 'parents': return 'Veli Yönetimi & Excel Toplu Aktarım';
         case 'roles': return 'Firestore Rol & Yetki Atamaları';
         case 'classes': return 'Sınıf & Şube Yapısı';
-        case 'backup': return 'Supabase PostgreSQL Yedekleme & RLS Güvenliği';
         case 'system': return 'Geliştirici & Sistem Ayarları';
         case 'achievements': return 'Öğrenci Başarı & Gamification';
         default: return 'Yönetim Paneli';

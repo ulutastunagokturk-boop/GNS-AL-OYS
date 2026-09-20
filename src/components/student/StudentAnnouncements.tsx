@@ -27,18 +27,19 @@ export const StudentAnnouncements: React.FC = () => {
   const { currentUser } = useAuth();
   const [search, setSearch] = useState('');
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
-
-  const allAnnouncements = dataService.getAnnouncements();
-
-  // Filter announcements for student (target: 'all' or 'students' or student's classGrade)
-  const studentAnnouncements = allAnnouncements.filter(a => 
-    a.targetAudience === 'all' || 
-    a.targetAudience === 'students' || 
-    (currentUser?.classGrade && (
-      a.targetClass === currentUser.classGrade ||
-      (a.targetClasses && a.targetClasses.includes(currentUser.classGrade))
-    ))
+  const [studentAnnouncements, setStudentAnnouncements] = useState<Announcement[]>(() => 
+    currentUser ? dataService.getAnnouncementsForStudent(currentUser.classGrade) : []
   );
+
+  React.useEffect(() => {
+    if (!currentUser) return;
+    const updateList = () => {
+      setStudentAnnouncements([...dataService.getAnnouncementsForStudent(currentUser.classGrade)]);
+    };
+    updateList();
+    const unsub = dataService.subscribe(updateList);
+    return unsub;
+  }, [currentUser?.classGrade]);
 
   // Auto-record student viewing when viewing this page
   React.useEffect(() => {

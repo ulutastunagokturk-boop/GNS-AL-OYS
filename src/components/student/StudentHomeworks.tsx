@@ -30,10 +30,25 @@ export const StudentHomeworks: React.FC = () => {
   const [studentNote, setStudentNote] = useState('');
   const [studentAttachmentName, setStudentAttachmentName] = useState<string | null>(null);
 
-  if (!currentUser) return null;
+  const [homeworks, setHomeworks] = useState<Homework[]>(() => 
+    currentUser ? dataService.getHomeworksForStudent(currentUser.classGrade, currentUser.uid) : []
+  );
+  const [studentSubmissions, setStudentSubmissions] = useState<HomeworkSubmission[]>(() => 
+    currentUser ? dataService.getSubmissionsForStudent(currentUser.uid) : []
+  );
 
-  const homeworks = dataService.getHomeworksForStudent(currentUser.classGrade);
-  const studentSubmissions = dataService.getSubmissionsForStudent(currentUser.uid);
+  React.useEffect(() => {
+    if (!currentUser) return;
+    const update = () => {
+      setHomeworks([...dataService.getHomeworksForStudent(currentUser.classGrade, currentUser.uid)]);
+      setStudentSubmissions([...dataService.getSubmissionsForStudent(currentUser.uid)]);
+    };
+    update();
+    const unsub = dataService.subscribe(update);
+    return unsub;
+  }, [currentUser?.classGrade, currentUser?.uid]);
+
+  if (!currentUser) return null;
 
   const getSubmissionForHomework = (hwId: string): HomeworkSubmission | undefined => {
     return studentSubmissions.find(s => s.homeworkId === hwId);

@@ -3,7 +3,6 @@ import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
 import { UserProfile, SchoolClass, RoleAssignment, UserRole } from '../../types';
 import { WeeklyScheduleView } from '../schedule/WeeklyScheduleView';
-import { SupabaseBackupManagerView } from './SupabaseBackupManagerView';
 import { 
   ShieldCheck, 
   Users, 
@@ -45,7 +44,7 @@ import { ExcelStudentImportModal } from './ExcelStudentImportModal';
 import { ExcelParentImportModal } from './ExcelParentImportModal';
 import { generateUniqueStudentPassword, PasswordStyle } from '../../utils/passwordGenerator';
 
-export type AdminTab = 'overview' | 'users' | 'parents' | 'roles' | 'classes' | 'schedule' | 'backup';
+export type AdminTab = 'overview' | 'users' | 'parents' | 'roles' | 'classes' | 'schedule';
 
 interface AdminDashboardProps {
   activeTab?: string;
@@ -701,18 +700,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <Clock className="w-4 h-4" />
           Ders Saatleri Çizelgesi
         </button>
-
-        <button
-          onClick={() => setActiveTab('backup')}
-          className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold rounded-xl whitespace-nowrap transition cursor-pointer ${
-            activeTab === 'backup'
-              ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
-              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-          }`}
-        >
-          <Database className="w-4 h-4 text-emerald-400" />
-          Supabase Bulut Yedekleme
-        </button>
       </div>
 
       {/* OVERVIEW TAB */}
@@ -803,23 +790,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div>
                 <div className="flex items-center gap-2">
                   <h4 className="font-extrabold text-sm text-white">
-                    Supabase PostgreSQL İkincil Yedekleme
+                    Supabase PostgreSQL Birincil Bulut Deposu
                   </h4>
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                    Asenkron Çift Yazma
+                    Birincil Aktif Veritabanı
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Firestore ile eşzamanlı olarak okul kayıtları PostgreSQL veritabanına otomatik aktarılır.
+                  Okul veritabanı doğrudan Supabase üzerinde çalışır; Firebase ise arka planda ikincil koruma yedeği olarak tutulur.
                 </p>
               </div>
             </div>
-            <button
-              onClick={() => setActiveTab('backup')}
-              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm shrink-0 transition cursor-pointer"
-            >
-              <span>Yedekleme Merkezini Aç</span>
-            </button>
+            <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-emerald-400 text-xs font-bold shrink-0">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span>Otomatik Senkronizasyon Açık</span>
+            </div>
           </div>
 
           {/* Quick Bulk Import Banner */}
@@ -1828,13 +1813,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {activeTab === 'schedule' && (
         <div className="space-y-4 animate-in fade-in">
           <WeeklyScheduleView />
-        </div>
-      )}
-
-      {/* SUPABASE CLOUD BACKUP TAB */}
-      {activeTab === 'backup' && (
-        <div className="space-y-4 animate-in fade-in">
-          <SupabaseBackupManagerView />
         </div>
       )}
 

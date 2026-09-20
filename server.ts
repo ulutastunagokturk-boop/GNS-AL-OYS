@@ -23,6 +23,12 @@ function sanitizeKey(key?: string): string {
 let inMemoryLastBackup: any = null;
 let supabaseClient: SupabaseClient | null = null;
 
+function isValidJwt(key?: string): boolean {
+  if (!key) return false;
+  const parts = key.split('.');
+  return parts.length === 3 && key.startsWith('eyJ');
+}
+
 function getSupabaseInfo(): { 
   client: SupabaseClient | null; 
   url: string; 
@@ -36,7 +42,10 @@ function getSupabaseInfo(): {
   }
   const serviceKey = sanitizeKey(process.env.SUPABASE_SERVICE_ROLE_KEY);
   const anonKey = sanitizeKey(process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY);
-  const key = serviceKey || anonKey;
+  
+  // Prefer serviceKey ONLY if it is a valid JWT; otherwise fallback to anonKey
+  const key = (serviceKey && isValidJwt(serviceKey)) ? serviceKey : (anonKey || serviceKey);
+  const isServiceRole = !!serviceKey && isValidJwt(serviceKey);
 
   if (!url || !key) {
     return { 
@@ -44,7 +53,7 @@ function getSupabaseInfo(): {
       url: url || '', 
       hasUrl: !!url, 
       hasKey: !!key, 
-      isServiceRole: !!serviceKey 
+      isServiceRole 
     };
   }
 
@@ -53,12 +62,12 @@ function getSupabaseInfo(): {
       supabaseClient = createClient(url, key, {
         auth: { persistSession: false, autoRefreshToken: false },
         global: {
-          headers: { 'x-application': 'gnsial-school-os-backup' }
+          headers: { 'x-application': 'gnsial-school-os-primary' }
         }
       });
     } catch (e) {
       console.error('[Supabase Init Error]:', e);
-      return { client: null, url, hasUrl: true, hasKey: true, isServiceRole: !!serviceKey };
+      return { client: null, url, hasUrl: true, hasKey: true, isServiceRole };
     }
   }
 
@@ -67,7 +76,7 @@ function getSupabaseInfo(): {
     url, 
     hasUrl: true, 
     hasKey: true, 
-    isServiceRole: !!serviceKey 
+    isServiceRole 
   };
 }
 
@@ -648,6 +657,66 @@ app.post('/api/database/sync-all', async (req, res) => {
       success: false,
       configured: true,
       message: err?.message || 'Eşitleme hatası'
+    });
+  }
+});
+
+app.post('/api/database/save', async (req, res) => {
+  const { store } = req.body;
+  const { client } = getSupabaseInfo();
+
+  if (!client) {
+    return res.json({ success: false, configured: false, message: 'Supabase yapılandırılmamış' });
+  }
+
+  const nowIso = new Date().toISOString();
+  try {
+    const stats = {
+      totalUsers: store?.users?.length || 0,
+      totalClasses: store?.classes?.length || 0,
+      totalHomeworks: store?.homeworks?.length || 0,
+      totalAnnouncements: store?.announcements?.length || 0,
+      totalGrades: store?.grades?.length || 0,
+      totalAttendance: store?.attendance?.length || 0,
+      totalSchedules: store?.schedules?.length || 0
+    };
+
+    const { data, error } = await client.from('school_backups').insert({
+      backup_type: 'primary_sync',
+      stats,
+      payload: store || {},
+      created_at: nowIso
+    }).select('id, created_at').single();
+
+    if (error) {
+      console.warn('[Supabase Primary Save Warning]:', error.message);
+    }
+
+    // Also attempt relational sync silently
+    try {
+      await syncAllToSupabaseRelationalTables(client, store || {});
+    } catch {}
+
+    inMemoryLastBackup = {
+      id: data?.id,
+      timestamp: data?.created_at || nowIso,
+      backup_type: 'primary_sync',
+      stats
+    };
+
+    return res.json({
+      success: true,
+      configured: true,
+      id: data?.id,
+      timestamp: data?.created_at || nowIso,
+      message: 'Supabase birincil veritabanına başarıyla kaydedildi'
+    });
+  } catch (err: any) {
+    console.error('[Supabase Save Error]:', err);
+    return res.status(500).json({
+      success: false,
+      configured: true,
+      message: err?.message || 'Kayıt sırasında hata oluştu'
     });
   }
 });

@@ -273,14 +273,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           badge: `${classes.length}` 
         },
         { 
-          id: 'backup', 
-          label: 'Supabase Yedekleme', 
-          sublabel: 'İkincil PostgreSQL Deposu', 
-          icon: Database, 
-          badge: 'Cloud',
-          badgeColor: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
-        },
-        { 
           id: 'system', 
           label: 'Sistem & Yönetim Ayarları', 
           sublabel: 'Genel Yapılandırma', 

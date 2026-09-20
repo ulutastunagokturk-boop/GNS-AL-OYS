@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
-import { Homework, HomeworkSubmission, HomeworkStatus, RubricItem, Attachment, UserProfile } from '../../types';
+import { Homework, HomeworkSubmission, HomeworkStatus, RubricItem, Attachment, UserProfile, SchoolClass } from '../../types';
 import { 
   BookOpen, 
   Plus, 
@@ -54,9 +54,18 @@ const STANDARD_SUBJECTS = [
 
 export const TeacherHomeworks: React.FC = () => {
   const { currentUser } = useAuth();
-  const classes = dataService.getClasses();
-  const homeworks = dataService.getHomeworks();
-  const allStudents = dataService.getStudents();
+  const [classes, setClasses] = useState<SchoolClass[]>(() => dataService.getClasses());
+  const [homeworks, setHomeworks] = useState<Homework[]>(() => dataService.getHomeworks());
+  const [allStudents, setAllStudents] = useState<UserProfile[]>(() => dataService.getStudents());
+
+  useEffect(() => {
+    const unsub = dataService.subscribe(() => {
+      setClasses([...dataService.getClasses()]);
+      setHomeworks([...dataService.getHomeworks()]);
+      setAllStudents([...dataService.getStudents()]);
+    });
+    return unsub;
+  }, []);
 
   const [selectedClassFilter, setSelectedClassFilter] = useState<string>('all');
   const [showCreateModal, setShowCreateModal] = useState(false);

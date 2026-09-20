@@ -22,10 +22,21 @@ export const StudentGrades: React.FC = () => {
   const [selectedExamType, setSelectedExamType] = useState<string>('all');
   const [searchSubject, setSearchSubject] = useState('');
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [grades, setGrades] = useState<GradeRecord[]>(() => 
+    currentUser ? dataService.getGradesForStudent(currentUser.uid) : []
+  );
+
+  React.useEffect(() => {
+    if (!currentUser) return;
+    const update = () => {
+      setGrades([...dataService.getGradesForStudent(currentUser.uid)]);
+    };
+    update();
+    const unsub = dataService.subscribe(update);
+    return unsub;
+  }, [currentUser?.uid]);
 
   if (!currentUser) return null;
-
-  const grades = dataService.getGradesForStudent(currentUser.uid);
 
   // Group grades by subject
   const subjectsMap: { [subject: string]: GradeRecord[] } = {};

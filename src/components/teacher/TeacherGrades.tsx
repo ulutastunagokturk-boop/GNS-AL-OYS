@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
-import { GradeRecord, ExamType, UserProfile } from '../../types';
+import { GradeRecord, ExamType, UserProfile, SchoolClass } from '../../types';
 import { 
   Award, 
   Save, 
@@ -53,11 +53,23 @@ const STANDARD_SUBJECTS = [
 
 export const TeacherGrades: React.FC = () => {
   const { currentUser } = useAuth();
-  const classes = dataService.getClasses();
-  const allStudents = dataService.getStudents();
+  const [classes, setClasses] = useState<SchoolClass[]>(() => dataService.getClasses());
+  const [allStudents, setAllStudents] = useState<UserProfile[]>(() => dataService.getStudents());
+
+  useEffect(() => {
+    const unsub = dataService.subscribe(() => {
+      setClasses([...dataService.getClasses()]);
+      setAllStudents([...dataService.getStudents()]);
+    });
+    return unsub;
+  }, []);
 
   // Selection states
-  const [selectedClass, setSelectedClass] = useState<string>(classes[0]?.name || '');
+  const [selectedClass, setSelectedClass] = useState<string>(() => {
+    const cls = dataService.getClasses();
+    const has9D = cls.find(c => c.name === '9-D');
+    return has9D ? '9-D' : (cls[0]?.name || '');
+  });
   const [selectedSubject, setSelectedSubject] = useState<string>(currentUser?.branch || 'Matematik');
   const [selectedExamType, setSelectedExamType] = useState<ExamType>('Yazılı 1');
   const [examDate, setExamDate] = useState<string>(new Date().toISOString().split('T')[0]);
