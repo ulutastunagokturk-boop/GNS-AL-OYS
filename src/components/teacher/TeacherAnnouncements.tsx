@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { dataService } from '../../services/dataService';
-import { Announcement, AnnouncementPriority, TargetAudience } from '../../types';
+import { dataService, normalizeClassName } from '../../services/dataService';
+import { Announcement, AnnouncementPriority, TargetAudience, SchoolClass, UserProfile } from '../../types';
 import { AnnouncementEditorModal } from './AnnouncementEditorModal';
 import { AnnouncementViewersModal } from './AnnouncementViewersModal';
 import { RichTextRenderer } from '../common/RichTextRenderer';
@@ -40,11 +40,12 @@ import {
 export const TeacherAnnouncements: React.FC = () => {
   const { currentUser } = useAuth();
   const [announcements, setAnnouncements] = useState<Announcement[]>(() => dataService.getAnnouncements());
-  const classes = dataService.getClasses();
-  const allStudents = dataService.getStudents();
+  const [classes, setClasses] = useState<SchoolClass[]>(() => dataService.getClasses());
+  const [allStudents, setAllStudents] = useState<UserProfile[]>(() => dataService.getStudents());
 
   const [isEditorModalOpen, setIsEditorModalOpen] = useState(false);
   const [editingAnnouncement, setEditingAnnouncement] = useState<Announcement | null>(null);
+  const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<{ id: string; title: string } | null>(null);
 
   // Viewers details modal
   const [selectedViewersAnnouncement, setSelectedViewersAnnouncement] = useState<Announcement | null>(null);
@@ -57,11 +58,15 @@ export const TeacherAnnouncements: React.FC = () => {
   const [selectedClassFilter, setSelectedClassFilter] = useState<string>('all');
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
-  // Subscribe to real-time data changes (e.g. when students view announcements)
+  // Subscribe to real-time data changes
   useEffect(() => {
-    const unsub = dataService.subscribe(() => {
+    const refresh = () => {
       setAnnouncements([...dataService.getAnnouncements()]);
-    });
+      setClasses([...dataService.getClasses()]);
+      setAllStudents([...dataService.getStudents()]);
+    };
+    refresh();
+    const unsub = dataService.subscribe(refresh);
     return unsub;
   }, []);
 
@@ -80,12 +85,17 @@ export const TeacherAnnouncements: React.FC = () => {
     setIsViewersModalOpen(true);
   };
 
-  const handleDelete = async (id: string, title: string) => {
-    if (window.confirm(`"${title}" başlıklı duyuruyu silmek istediğinize emin misiniz?`)) {
-      await dataService.deleteAnnouncement(id);
-      setActionSuccess(`"${title}" duyurusu başarıyla silindi.`);
-      setTimeout(() => setActionSuccess(null), 3000);
-    }
+  const handleDelete = (id: string, title: string) => {
+    setDeleteConfirmTarget({ id, title });
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteConfirmTarget) return;
+    const { id, title } = deleteConfirmTarget;
+    await dataService.deleteAnnouncement(id);
+    setActionSuccess(`"${title}" duyurusu başarıyla silindi.`);
+    setDeleteConfirmTarget(null);
+    setTimeout(() => setActionSuccess(null), 3000);
   };
 
   const handleTogglePin = async (id: string) => {
@@ -99,10 +109,12 @@ export const TeacherAnnouncements: React.FC = () => {
     }
     if (ann.targetAudience === 'class') {
       if (ann.targetClasses && ann.targetClasses.length > 0) {
-        return allStudents.filter(s => s.classGrade && ann.targetClasses?.includes(s.classGrade)).length;
+        const normClasses = ann.targetClasses.map(c => normalizeClassName(c));
+        return allStudents.filter(s => s.classGrade && (normClasses.includes('tum-okul') || normClasses.includes(normalizeClassName(s.classGrade)))).length;
       }
       if (ann.targetClass) {
-        return allStudents.filter(s => s.classGrade === ann.targetClass).length;
+        const parts = ann.targetClass.split(',').map(c => normalizeClassName(c.trim()));
+        return allStudents.filter(s => s.classGrade && (parts.includes('tum-okul') || parts.includes(normalizeClassName(s.classGrade)))).length;
       }
     }
     return 0;
@@ -125,10 +137,15 @@ export const TeacherAnnouncements: React.FC = () => {
       priorityFilter === 'all' || 
       a.priority === priorityFilter;
 
+    const cleanFilter = normalizeClassName(selectedClassFilter);
     const matchClass = 
       selectedClassFilter === 'all' || 
-      a.targetClass === selectedClassFilter ||
-      (a.targetClasses && a.targetClasses.includes(selectedClassFilter));
+      a.targetAudience === 'all' ||
+      a.targetAudience === 'students' ||
+      (a.targetAudience === 'class' && (
+        (a.targetClasses && a.targetClasses.some(c => c === 'Tüm Okul' || normalizeClassName(c) === cleanFilter)) ||
+        (a.targetClass && a.targetClass.split(',').some(c => c.trim() === 'Tüm Okul' || normalizeClassName(c.trim()) === cleanFilter))
+      ));
 
     return matchSearch && matchAudience && matchPriority && matchClass;
   });
@@ -392,7 +409,7 @@ export const TeacherAnnouncements: React.FC = () => {
           </div>
         ) : (
           filtered.map(ann => {
-            const isAuthor = currentUser?.uid === ann.authorId || currentUser?.role === 'admin';
+            const isAuthor = currentUser?.uid === ann.authorId || currentUser?.role === 'admin' || currentUser?.role === 'teacher';
             const studentViewersCount = ann.viewedByStudents?.length || 0;
             const targetCount = getTargetStudentCount(ann);
             const reachPercentage = targetCount > 0 
@@ -611,6 +628,42 @@ export const TeacherAnnouncements: React.FC = () => {
         onClose={() => setIsViewersModalOpen(false)}
         announcement={selectedViewersAnnouncement}
       />
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-sm w-full border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 rounded-2xl bg-rose-100 dark:bg-rose-950/60 text-rose-600">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-900 dark:text-white">Duyuruyu Sil</h4>
+                <p className="text-xs text-slate-500">Bu işlem geri alınamaz.</p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-300">
+              <strong>"{deleteConfirmTarget.title}"</strong> başlıklı duyuruyu silmek istediğinize emin misiniz?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmTarget(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              >
+                Vazgeç
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white transition shadow-xs"
+              >
+                Evet, Sil
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

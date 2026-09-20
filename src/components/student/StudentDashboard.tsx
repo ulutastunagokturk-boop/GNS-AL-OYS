@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
 import { StudentHomeworks } from './StudentHomeworks';
@@ -30,6 +30,12 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
 }) => {
   const { currentUser } = useAuth();
   const [internalTab, setInternalTab] = useState<'schedule' | 'homeworks' | 'grades' | 'attendance' | 'announcements'>('homeworks');
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const unsub = dataService.subscribe(() => setTick(t => t + 1));
+    return unsub;
+  }, []);
 
   const activeTab = (controlledTab as any) || internalTab;
   const setActiveTab = (tab: 'schedule' | 'homeworks' | 'grades' | 'attendance' | 'announcements') => {
@@ -39,11 +45,11 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
 
   if (!currentUser) return null;
 
-  const homeworks = dataService.getHomeworksForStudent(currentUser.classGrade);
+  const homeworks = dataService.getHomeworksForStudent(currentUser.classGrade, currentUser.uid);
   const submissions = dataService.getSubmissionsForStudent(currentUser.uid);
   const grades = dataService.getGradesForStudent(currentUser.uid);
   const attendanceRecords = dataService.getAttendanceForStudent(currentUser.uid);
-  const announcements = dataService.getAnnouncements();
+  const announcements = dataService.getAnnouncementsForStudent(currentUser.classGrade);
 
   // Metrics
   const pendingHomeworkCount = homeworks.filter(hw => {

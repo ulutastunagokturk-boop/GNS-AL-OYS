@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { dataService } from '../../services/dataService';
+import { dataService, normalizeClassName } from '../../services/dataService';
 import { Homework, HomeworkSubmission, HomeworkStatus, RubricItem, Attachment, UserProfile, SchoolClass } from '../../types';
 import { 
   BookOpen, 
@@ -72,6 +72,7 @@ export const TeacherHomeworks: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingHomework, setEditingHomework] = useState<Homework | null>(null);
   const [activeTrackingHomework, setActiveTrackingHomework] = useState<Homework | null>(null);
+  const [deleteConfirmHw, setDeleteConfirmHw] = useState<{ id: string; title: string } | null>(null);
 
   // Form State
   const [title, setTitle] = useState('');
@@ -148,8 +149,9 @@ export const TeacherHomeworks: React.FC = () => {
   const filteredHomeworks = homeworks.filter(hw => {
     if (selectedClassFilter === 'all') return true;
     if (hw.targetClass === 'Tüm Okul') return true;
-    if (hw.targetClasses && hw.targetClasses.includes(selectedClassFilter)) return true;
-    if (hw.targetClass === selectedClassFilter) return true;
+    const cleanFilter = normalizeClassName(selectedClassFilter);
+    if (hw.targetClasses && hw.targetClasses.some(tc => tc === 'Tüm Okul' || normalizeClassName(tc) === cleanFilter)) return true;
+    if (hw.targetClass && hw.targetClass.split(',').some(tc => normalizeClassName(tc.trim()) === cleanFilter)) return true;
     return false;
   });
 
@@ -307,10 +309,14 @@ export const TeacherHomeworks: React.FC = () => {
     } catch (e) {}
   };
 
-  const handleDelete = async (id: string) => {
-    if (window.confirm('Bu ödevi ve tüm takip kayıtlarını silmek istediğinize emin misiniz?')) {
-      await dataService.deleteHomework(id);
-    }
+  const handleDelete = (id: string, title: string) => {
+    setDeleteConfirmHw({ id, title });
+  };
+
+  const confirmDeleteHw = async () => {
+    if (!deleteConfirmHw) return;
+    await dataService.deleteHomework(deleteConfirmHw.id);
+    setDeleteConfirmHw(null);
   };
 
   return (
@@ -391,7 +397,7 @@ export const TeacherHomeworks: React.FC = () => {
                         <Edit3 className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={() => handleDelete(hw.id)}
+                        onClick={() => handleDelete(hw.id, hw.title)}
                         className="text-slate-400 hover:text-rose-500 p-1 rounded-lg transition"
                         title="Ödevi Sil"
                       >
@@ -904,6 +910,42 @@ export const TeacherHomeworks: React.FC = () => {
         />
       )}
 
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmHw && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-sm w-full border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 rounded-2xl bg-rose-100 dark:bg-rose-950/60 text-rose-600">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-900 dark:text-white">Ödevi Sil</h4>
+                <p className="text-xs text-slate-500">Bu işlem geri alınamaz.</p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-300">
+              <strong>"{deleteConfirmHw.title}"</strong> başlıklı ödevi ve tüm öğrenci teslim kayıtlarını silmek istediğinize emin misiniz?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmHw(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              >
+                Vazgeç
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteHw}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white transition shadow-xs"
+              >
+                Evet, Sil
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };
@@ -928,6 +970,12 @@ const HomeworkTrackingReportModal: React.FC<{
   const reloadSubmissions = () => {
     setSubmissions([...dataService.getSubmissionsForHomework(homework.id)]);
   };
+
+  useEffect(() => {
+    reloadSubmissions();
+    const unsub = dataService.subscribe(reloadSubmissions);
+    return unsub;
+  }, [homework.id]);
 
   const handleUpdateStatus = async (
     studentId: string, 

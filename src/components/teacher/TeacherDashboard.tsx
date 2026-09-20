@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
 import { TeacherHomeworks } from './TeacherHomeworks';
@@ -32,6 +32,12 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 }) => {
   const { currentUser } = useAuth();
   const [internalTab, setInternalTab] = useState<'schedule' | 'homeworks' | 'grades' | 'attendance' | 'announcements' | 'students'>('homeworks');
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const unsub = dataService.subscribe(() => setTick(t => t + 1));
+    return unsub;
+  }, []);
 
   const activeTab = (controlledTab as any) || internalTab;
   const setActiveTab = (tab: 'schedule' | 'homeworks' | 'grades' | 'attendance' | 'announcements' | 'students') => {

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
-import { Announcement, AnnouncementPriority, TargetAudience, Attachment } from '../../types';
+import { Announcement, AnnouncementPriority, TargetAudience, Attachment, SchoolClass } from '../../types';
 import { RichTextRenderer } from '../common/RichTextRenderer';
 import {
   Megaphone,
@@ -18,6 +18,7 @@ import {
   ListChecks,
   Quote,
   AlertCircle,
+  AlertTriangle,
   Table,
   Link,
   Link2,
@@ -177,7 +178,7 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
   onSaved
 }) => {
   const { currentUser } = useAuth();
-  const classes = dataService.getClasses();
+  const [classes, setClasses] = useState<SchoolClass[]>(() => dataService.getClasses());
 
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
@@ -189,6 +190,7 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
   const [tags, setTags] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<'edit' | 'split' | 'preview'>('edit');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Attachments & Resource Links
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -202,6 +204,12 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
 
   // Initialize data on open / edit
   useEffect(() => {
+    if (!isOpen) return;
+
+    const freshClasses = dataService.getClasses();
+    setClasses(freshClasses);
+    setFormError(null);
+
     if (announcementToEdit) {
       setTitle(announcementToEdit.title || '');
       setContent(announcementToEdit.content || '');
@@ -211,9 +219,10 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
       if (announcementToEdit.targetClasses && announcementToEdit.targetClasses.length > 0) {
         setSelectedClasses(announcementToEdit.targetClasses);
       } else if (announcementToEdit.targetClass) {
-        setSelectedClasses([announcementToEdit.targetClass]);
-      } else if (classes.length > 0) {
-        setSelectedClasses([classes[0].name]);
+        const parts = announcementToEdit.targetClass.split(',').map(s => s.trim()).filter(Boolean);
+        setSelectedClasses(parts.length > 0 ? parts : [announcementToEdit.targetClass]);
+      } else if (freshClasses.length > 0) {
+        setSelectedClasses([freshClasses[0].name]);
       }
 
       setPinned(!!announcementToEdit.pinned);
@@ -224,7 +233,7 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
       setContent('');
       setPriority('normal');
       setTargetAudience('all');
-      setSelectedClasses(classes.length > 0 ? [classes[0].name] : []);
+      setSelectedClasses(freshClasses.length > 0 ? [freshClasses[0].name] : ['9-D']);
       setPinned(false);
       setTags(['Duyuru']);
       setAttachments([]);
@@ -234,7 +243,7 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
       setAttachCategory('general');
       setShowAttachForm(false);
     }
-  }, [announcementToEdit, isOpen, classes]);
+  }, [announcementToEdit, isOpen]);
 
   if (!isOpen) return null;
 
@@ -378,14 +387,21 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !content.trim() || !currentUser) return;
+    setFormError(null);
+    if (!title.trim() || !content.trim() || !currentUser) {
+      setFormError('Lütfen duyuru başlığını ve içeriğini eksiksiz doldurunuz.');
+      return;
+    }
 
     if (targetAudience === 'class' && selectedClasses.length === 0) {
-      alert('Lütfen duyurunun yayınlanacağı en az bir sınıf veya şube seçiniz.');
+      setFormError('Lütfen duyurunun yayınlanacağı en az bir sınıf veya şube seçiniz.');
       return;
     }
 
     setIsSubmitting(true);
+
+    const targetClassStr = targetAudience === 'class' ? (selectedClasses.length > 0 ? selectedClasses.join(', ') : undefined) : undefined;
+    const targetClassesArr = targetAudience === 'class' ? selectedClasses : undefined;
 
     try {
       if (announcementToEdit) {
@@ -394,8 +410,8 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
           content: content.trim(),
           priority,
           targetAudience,
-          targetClass: targetAudience === 'class' ? (selectedClasses[0] || undefined) : undefined,
-          targetClasses: targetAudience === 'class' ? selectedClasses : undefined,
+          targetClass: targetClassStr,
+          targetClasses: targetClassesArr,
           pinned,
           tags,
           attachments
@@ -407,8 +423,8 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
             content: content.trim(),
             priority,
             targetAudience,
-            targetClass: targetAudience === 'class' ? (selectedClasses[0] || undefined) : undefined,
-            targetClasses: targetAudience === 'class' ? selectedClasses : undefined,
+            targetClass: targetClassStr,
+            targetClasses: targetClassesArr,
             pinned,
             tags,
             attachments
@@ -423,8 +439,8 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
           authorRole: currentUser.role,
           authorId: currentUser.uid,
           targetAudience,
-          targetClass: targetAudience === 'class' ? (selectedClasses[0] || undefined) : undefined,
-          targetClasses: targetAudience === 'class' ? selectedClasses : undefined,
+          targetClass: targetClassStr,
+          targetClasses: targetClassesArr,
           priority,
           pinned,
           tags,
@@ -442,9 +458,9 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
       }
 
       onClose();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Duyuru kaydedilirken bir hata oluştu.');
+      setFormError(`Duyuru kaydedilirken bir hata oluştu: ${err?.message || 'Lütfen tekrar deneyiniz'}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -524,6 +540,13 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
         {/* Modal Scrollable Body */}
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5">
           
+          {formError && (
+            <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
+
           {/* Quick Preset Templates */}
           {!announcementToEdit && (
             <div className="bg-purple-50/60 dark:bg-purple-950/30 border border-purple-100 dark:border-purple-900/50 p-3.5 rounded-2xl">
