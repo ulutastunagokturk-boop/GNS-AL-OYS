@@ -400,17 +400,23 @@ class SupabaseBackupManager {
         totalAttendance: store.attendance?.length || 0
       };
 
-      // Hassas/aşırı büyük olabilecek token verilerini filtreleyip temiz snapshot oluştur
+      // Tam ve eksiksiz snapshot oluştur
       const cleanSnapshot = {
         users: store.users || [],
         classes: store.classes || [],
         schedules: store.schedules || [],
         homeworks: store.homeworks || [],
+        submissions: store.submissions || [],
         announcements: store.announcements || [],
         grades: store.grades || [],
         attendance: store.attendance || [],
+        notifications: store.notifications || [],
+        badges: store.badges || [],
+        studentBadges: store.studentBadges || [],
+        scheduleNotes: store.scheduleNotes || {},
         roleAssignments: store.roleAssignments || [],
         systemLogs: (store.systemLogs || []).slice(0, 100), // Son 100 log
+        lastUpdated: store.lastUpdated || Date.now(),
         timestamp: new Date().toISOString()
       };
 
@@ -471,6 +477,26 @@ class SupabaseBackupManager {
 
   public getIsSyncing(): boolean {
     return this.isSyncing;
+  }
+
+  /**
+   * Birincil veritabanına anlık durum kaydeder ve SSE üzerinden diğer cihazlara anında yayınlar
+   */
+  public async saveDatabaseState(store: LocalCacheStore, senderClientId?: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const res = await fetch('/api/database/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ store, senderClientId })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return { success: data.success ?? true, message: data.message || 'Kaydedildi' };
+      }
+    } catch (err: any) {
+      console.warn('[Supabase Save Request Failed]:', err);
+    }
+    return { success: false, message: 'İstek iletilemedi' };
   }
 
   public getSetupSql(): string {

@@ -262,11 +262,21 @@ class DataService {
       lastUpdated: Date.now()
     };
 
-    this.saveCache(initialStore);
+    this.saveCache(initialStore, false);
     return initialStore;
   }
 
-  private saveCache(store: LocalCacheStore) {
+  private clientId: string = typeof window !== 'undefined' 
+    ? (sessionStorage.getItem('gnsial_client_id') || (() => {
+        const id = 'client-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now();
+        sessionStorage.setItem('gnsial_client_id', id);
+        return id;
+      })())
+    : 'srv-' + Date.now();
+  private sseEventSource: EventSource | null = null;
+
+  private saveCache(store: LocalCacheStore, syncToServer: boolean = true) {
+    store.lastUpdated = Date.now();
     this.cache = store;
     try {
       localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(store));
@@ -275,11 +285,12 @@ class DataService {
     }
     this.notifySubscribers();
 
-    // Supabase Birincil Bulut Veritabanı (Arka Plan Asenkron Eşitleme)
-    try {
-      supabaseBackupService.scheduleAutoBackup(store, 1000);
-    } catch (err) {
-      console.warn('[DataService] Failed to schedule auto backup to Supabase:', err);
+    if (syncToServer) {
+      // Supabase Birincil Bulut Veritabanına anlık yaz ve tüm diğer açık cihazlara SSE ile yay
+      supabaseBackupService.saveDatabaseState(store, this.clientId).catch(err => {
+        console.warn('[DataService] Immediate save error, fallback to debounced backup:', err);
+        supabaseBackupService.scheduleAutoBackup(store, 1500);
+      });
     }
   }
 
@@ -302,21 +313,158 @@ class DataService {
     });
   }
 
+  private setupRealtimeSync() {
+    if (typeof window === 'undefined' || typeof EventSource === 'undefined') return;
+    if (this.sseEventSource) {
+      try { this.sseEventSource.close(); } catch {}
+    }
+
+    try {
+      this.sseEventSource = new EventSource('/api/database/events');
+
+      this.sseEventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'state_updated' && data.state) {
+            // Ignore updates that originated from this exact browser tab
+            if (data.senderClientId && data.senderClientId === this.clientId) {
+              return;
+            }
+            this.applyRemoteState(data.state);
+          }
+        } catch {
+          // ignore heartbeat / comments
+        }
+      };
+
+      this.sseEventSource.onerror = () => {
+        // EventSource automatically handles reconnection
+      };
+    } catch (err) {
+      console.warn('[DataService Realtime Sync Setup Error]:', err);
+    }
+  }
+
+  /**
+   * Sunucudan veya diğer cihazlardan gelen güncel veritabanı durumunu yerel belleğe uygular
+   */
+  public applyRemoteState(state: any) {
+    if (!state || typeof state !== 'object') return;
+
+    let changed = false;
+
+    // Ödevler (Homeworks): Sunucudaki tam listeyi doğrudan uygula
+    if (Array.isArray(state.homeworks)) {
+      this.cache.homeworks = state.homeworks;
+      changed = true;
+    }
+
+    // Ödev Teslimleri (Submissions):
+    if (Array.isArray(state.submissions)) {
+      this.cache.submissions = state.submissions;
+      changed = true;
+    }
+
+    // Duyurular (Announcements):
+    if (Array.isArray(state.announcements)) {
+      this.cache.announcements = state.announcements;
+      changed = true;
+    }
+
+    // Notlar (Grades):
+    if (Array.isArray(state.grades)) {
+      this.cache.grades = state.grades;
+      changed = true;
+    }
+
+    // Yoklama (Attendance):
+    if (Array.isArray(state.attendance)) {
+      this.cache.attendance = state.attendance;
+      changed = true;
+    }
+
+    // Sınıflar (Classes):
+    if (Array.isArray(state.classes) && state.classes.length > 0) {
+      this.cache.classes = state.classes;
+      changed = true;
+    }
+
+    // Ders Programları (Schedules):
+    if (Array.isArray(state.schedules) && state.schedules.length > 0) {
+      this.cache.schedules = state.schedules;
+      changed = true;
+    }
+
+    if (state.scheduleNotes && typeof state.scheduleNotes === 'object') {
+      this.cache.scheduleNotes = state.scheduleNotes;
+      changed = true;
+    }
+
+    // Bildirimler (Notifications):
+    if (Array.isArray(state.notifications)) {
+      this.cache.notifications = state.notifications;
+      changed = true;
+    }
+
+    // Rozetler & Başarımlar:
+    if (Array.isArray(state.studentBadges)) {
+      this.cache.studentBadges = state.studentBadges;
+      changed = true;
+    }
+
+    // Rol Atamaları:
+    if (Array.isArray(state.roleAssignments)) {
+      this.cache.roleAssignments = state.roleAssignments.filter((ra: any) => 
+        ra.assignedRole === 'admin' && 
+        (ra.userEmail || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' &&
+        ra.id !== 'assign-admin-owner'
+      );
+      changed = true;
+    }
+
+    // Kullanıcılar (Users):
+    if (Array.isArray(state.users) && state.users.length > 0) {
+      const userMap = new Map<string, UserProfile>();
+      userMap.set(INITIAL_ADMIN.uid, INITIAL_ADMIN);
+      state.users
+        .filter((u: UserProfile) => (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' && u.uid !== 'admin-owner-ulutas')
+        .forEach((u: UserProfile) => userMap.set(u.uid, u));
+      this.cache.users = Array.from(userMap.values());
+      changed = true;
+    }
+
+    if (state.lastUpdated) {
+      this.cache.lastUpdated = state.lastUpdated;
+    }
+
+    if (changed) {
+      try {
+        localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(this.cache));
+      } catch {}
+      this.notifySubscribers();
+    }
+  }
+
   private async initData() {
     try {
       // 1. First sync from live Supabase PostgreSQL database tables and backups (Primary)
-      await this.syncFromSupabaseDatabase();
+      const synced = await this.syncFromSupabaseDatabase();
 
-      // 2. Ensure default starter data exists if empty
-      this.ensureStarterDataIfEmpty();
+      // 2. Ensure default starter data exists if cache was empty and not synced
+      if (!synced) {
+        this.ensureStarterDataIfEmpty();
+      }
 
-      // 3. Setup Firestore listeners & sync as backup
+      // 3. Setup real-time multi-device SSE listener
+      this.setupRealtimeSync();
+
+      // 4. Setup Firestore listeners & sync as backup
       this.setupFirestoreListeners();
       await this.syncUsersFromFirestore();
       await this.seedInitialAdminIfMissing();
       await this.seedInitialClassesAndSchedulesIfMissing();
 
-      // 4. Ensure live relational database has current classes and users
+      // 5. Ensure live relational database has current classes and users
       await this.seedSupabaseIfEmpty();
 
       this.isInitialized = true;
@@ -333,94 +481,9 @@ class DataService {
     try {
       const { success, state } = await supabaseBackupService.fetchDatabaseState();
       if (success && state && typeof state === 'object') {
-        let changed = false;
-
-        if (Array.isArray(state.users) && state.users.length > 0) {
-          const userMap = new Map<string, UserProfile>();
-          // Preserve local root admin
-          userMap.set(INITIAL_ADMIN.uid, INITIAL_ADMIN);
-          // Put existing cache users
-          this.cache.users
-            .filter(u => (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' && u.uid !== 'admin-owner-ulutas')
-            .forEach(u => userMap.set(u.uid, u));
-          // Merge database users
-          state.users
-            .filter((u: UserProfile) => (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' && u.uid !== 'admin-owner-ulutas')
-            .forEach((u: UserProfile) => userMap.set(u.uid, u));
-          this.cache.users = Array.from(userMap.values());
-          changed = true;
-        }
-
-        if (Array.isArray(state.classes) && state.classes.length > 0) {
-          const classMap = new Map<string, SchoolClass>();
-          this.cache.classes.forEach(c => classMap.set(c.id, c));
-          state.classes.forEach(c => classMap.set(c.id, c));
-          this.cache.classes = Array.from(classMap.values());
-          changed = true;
-        }
-
-        if (Array.isArray(state.announcements) && state.announcements.length > 0) {
-          const annMap = new Map<string, Announcement>();
-          this.cache.announcements.forEach(a => annMap.set(a.id, a));
-          state.announcements.forEach(a => annMap.set(a.id, a));
-          this.cache.announcements = Array.from(annMap.values());
-          changed = true;
-        }
-
-        if (Array.isArray(state.homeworks) && state.homeworks.length > 0) {
-          const hwMap = new Map<string, Homework>();
-          this.cache.homeworks.forEach(h => hwMap.set(h.id, h));
-          state.homeworks.forEach(h => hwMap.set(h.id, h));
-          this.cache.homeworks = Array.from(hwMap.values());
-          changed = true;
-        }
-
-        if (Array.isArray(state.submissions) && state.submissions.length > 0) {
-          const subMap = new Map<string, HomeworkSubmission>();
-          this.cache.submissions.forEach(s => subMap.set(s.id, s));
-          state.submissions.forEach(s => subMap.set(s.id, s));
-          this.cache.submissions = Array.from(subMap.values());
-          changed = true;
-        }
-
-        if (Array.isArray(state.grades) && state.grades.length > 0) {
-          const grdMap = new Map<string, GradeRecord>();
-          this.cache.grades.forEach(g => grdMap.set(g.id, g));
-          state.grades.forEach(g => grdMap.set(g.id, g));
-          this.cache.grades = Array.from(grdMap.values());
-          changed = true;
-        }
-
-        if (Array.isArray(state.attendance) && state.attendance.length > 0) {
-          const attMap = new Map<string, AttendanceRecord>();
-          this.cache.attendance.forEach(a => attMap.set(a.id, a));
-          state.attendance.forEach(a => attMap.set(a.id, a));
-          this.cache.attendance = Array.from(attMap.values());
-          changed = true;
-        }
-
-        if (Array.isArray(state.schedules) && state.schedules.length > 0) {
-          this.cache.schedules = state.schedules;
-          changed = true;
-        }
-
-        if (Array.isArray(state.roleAssignments) && state.roleAssignments.length > 0) {
-          this.cache.roleAssignments = state.roleAssignments.filter(ra => 
-            ra.assignedRole === 'admin' && 
-            (ra.userEmail || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' &&
-            ra.id !== 'assign-admin-owner'
-          );
-          changed = true;
-        }
-
-        if (changed) {
-          try {
-            localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(this.cache));
-          } catch {}
-          this.notifySubscribers();
-          if (!silent) {
-            console.log('[DataService] Canlı Supabase veritabanından veriler başarıyla yüklendi!');
-          }
+        this.applyRemoteState(state);
+        if (!silent) {
+          console.log('[DataService] Canlı Supabase veritabanından veriler başarıyla eşitlendi!');
         }
         return true;
       }
@@ -520,7 +583,7 @@ class DataService {
     if (this.liveSyncTimer) return;
     this.liveSyncTimer = setInterval(() => {
       this.syncFromSupabaseDatabase(true);
-    }, 15000);
+    }, 8000);
 
     if (typeof window !== 'undefined') {
       window.addEventListener('focus', () => {
@@ -2210,6 +2273,41 @@ class DataService {
     }
 
     return homework;
+  }
+
+  public async updateHomework(homeworkId: string, updates: Partial<Homework>): Promise<Homework | null> {
+    const existingIndex = this.cache.homeworks.findIndex(h => h.id === homeworkId);
+    if (existingIndex < 0) return null;
+
+    const existingHw = this.cache.homeworks[existingIndex];
+    const updatedHw: Homework = {
+      ...existingHw,
+      ...updates
+    };
+
+    const updatedHomeworks = [...this.cache.homeworks];
+    updatedHomeworks[existingIndex] = updatedHw;
+
+    this.saveCache({
+      ...this.cache,
+      homeworks: updatedHomeworks
+    });
+
+    this.logSystemAction(
+      'Ödev Güncellendi',
+      updatedHw.teacherName,
+      'teacher',
+      updatedHw.targetClass,
+      `"${updatedHw.title}" (${updatedHw.subject}) ödevi güncellendi.`
+    );
+
+    try {
+      await updateDoc(doc(db, 'homeworks', homeworkId), sanitizeForFirestore(updates));
+    } catch (e) {
+      console.log('Firebase update homework sync:', e);
+    }
+
+    return updatedHw;
   }
 
   public async deleteHomework(homeworkId: string): Promise<void> {

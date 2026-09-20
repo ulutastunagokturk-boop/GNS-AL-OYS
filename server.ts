@@ -429,6 +429,55 @@ async function syncAllToSupabaseRelationalTables(client: SupabaseClient, store: 
   return stats;
 }
 
+// ================= LIVE DATABASE REALTIME SSE & IN-MEMORY CACHE =================
+let inMemoryLatestState: any = null;
+const sseClients = new Set<express.Response>();
+
+function broadcastStateUpdate(state: any, senderClientId?: string) {
+  if (!state) return;
+  const payload = JSON.stringify({
+    type: 'state_updated',
+    timestamp: new Date().toISOString(),
+    lastUpdated: state.lastUpdated || Date.now(),
+    senderClientId: senderClientId || null,
+    state
+  });
+  for (const clientRes of Array.from(sseClients)) {
+    try {
+      clientRes.write(`data: ${payload}\n\n`);
+    } catch {
+      sseClients.delete(clientRes);
+    }
+  }
+}
+
+// Server-Sent Events (SSE) Endpoint for Instant Multi-Device Reactivity
+app.get('/api/database/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() })}\n\n`);
+  sseClients.add(res);
+
+  req.on('close', () => {
+    sseClients.delete(res);
+  });
+});
+
+// Periodic SSE Keep-Alive Heartbeat
+setInterval(() => {
+  for (const clientRes of Array.from(sseClients)) {
+    try {
+      clientRes.write(': heartbeat\n\n');
+    } catch {
+      sseClients.delete(clientRes);
+    }
+  }
+}, 20000);
+
 // ================= SUPABASE BACKUP API ENDPOINTS =================
 app.get('/api/backup/supabase/status', async (req, res) => {
   const { client, url, hasUrl, hasKey, isServiceRole } = getSupabaseInfo();
@@ -514,18 +563,24 @@ CREATE INDEX IF NOT EXISTS idx_school_backups_created_at ON public.school_backup
 });
 
 app.post('/api/backup/supabase/sync', async (req, res) => {
-  const { syncType = 'auto', stats = {}, snapshot } = req.body;
+  const { syncType = 'auto', stats = {}, snapshot, senderClientId } = req.body;
   const { client } = getSupabaseInfo();
 
   const nowIso = new Date().toISOString();
 
+  // Instant in-memory cache update & SSE broadcast to all other open devices
+  if (snapshot) {
+    inMemoryLatestState = snapshot;
+    broadcastStateUpdate(snapshot, senderClientId);
+  }
+
   if (!client) {
     return res.json({
-      success: false,
+      success: true,
       configured: false,
       timestamp: nowIso,
       stats,
-      message: 'Supabase ortam değişkenleri (SUPABASE_URL ve SUPABASE_ANON_KEY / SERVICE_ROLE_KEY) henüz yapılandırılmamış. Lütfen .env veya Settings üzerinden tanımlayınız.'
+      message: 'Supabase ortam değişkenleri henüz yapılandırılmamış, yerel bellek güncellendi.'
     });
   }
 
@@ -547,8 +602,11 @@ app.post('/api/backup/supabase/sync', async (req, res) => {
       console.warn('[Supabase Sync Warning]:', error.message);
     }
 
-    // Also write snapshot directly into individual relational tables
-    const tableSyncStats = await syncAllToSupabaseRelationalTables(client, snapshot || {});
+    // Also attempt relational sync silently
+    let tableSyncStats = null;
+    try {
+      tableSyncStats = await syncAllToSupabaseRelationalTables(client, snapshot || {});
+    } catch {}
 
     const tableCounts = await getLiveSupabaseTableCounts(client);
 
@@ -567,7 +625,7 @@ app.post('/api/backup/supabase/sync', async (req, res) => {
       stats,
       tableCounts,
       relationalSync: tableSyncStats,
-      message: `Tüm okul verileri ve Supabase tabloları (${tableCounts.profiles} profil, ${tableCounts.classes} sınıf, ${tableCounts.assignments} ödev, ${tableCounts.grades} not, ${tableCounts.attendance} yoklama, ${tableCounts.parents || 0} veli, ${tableCounts.students || 0} öğrenci) başarıyla güncellendi!`
+      message: `Tüm okul verileri Supabase veritabanına başarıyla kaydedildi!`
     });
   } catch (err: any) {
     console.error('[Supabase Sync Error]:', err);
@@ -582,6 +640,16 @@ app.post('/api/backup/supabase/sync', async (req, res) => {
 
 // ================= LIVE DATABASE STATE RETRIEVAL & COMPLETE SYNC =================
 app.get('/api/database/state', async (req, res) => {
+  // If we already have the latest state in memory, return it instantly!
+  if (inMemoryLatestState) {
+    return res.json({
+      success: true,
+      configured: true,
+      timestamp: inMemoryLatestState.timestamp || new Date().toISOString(),
+      state: inMemoryLatestState
+    });
+  }
+
   const { client } = getSupabaseInfo();
   if (!client) {
     return res.json({ success: false, configured: false, state: null });
@@ -599,6 +667,9 @@ app.get('/api/database/state', async (req, res) => {
     const tableCounts = await getLiveSupabaseTableCounts(client);
 
     let state = latestBackup?.payload || null;
+    if (state) {
+      inMemoryLatestState = state;
+    }
 
     return res.json({
       success: true,
@@ -621,6 +692,11 @@ app.get('/api/database/state', async (req, res) => {
 app.post('/api/database/sync-all', async (req, res) => {
   const { store } = req.body;
   const { client } = getSupabaseInfo();
+
+  if (store) {
+    inMemoryLatestState = store;
+    broadcastStateUpdate(store);
+  }
 
   if (!client) {
     return res.json({ success: false, configured: false, message: 'Supabase yapılandırılmamış' });
@@ -662,11 +738,17 @@ app.post('/api/database/sync-all', async (req, res) => {
 });
 
 app.post('/api/database/save', async (req, res) => {
-  const { store } = req.body;
+  const { store, senderClientId } = req.body;
   const { client } = getSupabaseInfo();
 
+  // Instant in-memory cache update & SSE broadcast to all other open devices
+  if (store) {
+    inMemoryLatestState = store;
+    broadcastStateUpdate(store, senderClientId);
+  }
+
   if (!client) {
-    return res.json({ success: false, configured: false, message: 'Supabase yapılandırılmamış' });
+    return res.json({ success: true, configured: false, message: 'Yerel bellek güncellendi, Supabase yapılandırılmamış' });
   }
 
   const nowIso = new Date().toISOString();

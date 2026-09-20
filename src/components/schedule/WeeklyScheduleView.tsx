@@ -207,19 +207,6 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = () => {
         </div>
       </div>
 
-      {/* Notice Banner: Class Timetable Cancelled / Bell Times Active */}
-      <div className="p-4 rounded-2xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60 flex items-start sm:items-center gap-3 text-xs sm:text-sm text-blue-900 dark:text-blue-200">
-        <Info className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5 sm:mt-0" />
-        <div className="space-y-0.5">
-          <p className="font-bold">
-            Okul İdaresi Bilgilendirmesi:
-          </p>
-          <p className="text-xs text-blue-800/90 dark:text-blue-300">
-            Haftalık sınıf bazlı ders dağılım programları okul idaresi tarafından henüz yayınlanmamış / iptal edilmiş olup, tüm şube ve öğretmenler için geçerli <strong>günlük ders ve zil saatleri</strong> aşağıda listelenmiştir.
-          </p>
-        </div>
-      </div>
-
       {/* Live Bell & Current Period Status Card */}
       <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">

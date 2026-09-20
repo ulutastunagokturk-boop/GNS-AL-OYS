@@ -28,7 +28,8 @@ import {
   Image as ImageIcon,
   School,
   UserCheck,
-  GraduationCap
+  GraduationCap,
+  Edit3
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -69,6 +70,7 @@ export const TeacherHomeworks: React.FC = () => {
 
   const [selectedClassFilter, setSelectedClassFilter] = useState<string>('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingHomework, setEditingHomework] = useState<Homework | null>(null);
   const [activeTrackingHomework, setActiveTrackingHomework] = useState<Homework | null>(null);
 
   // Form State
@@ -102,6 +104,45 @@ export const TeacherHomeworks: React.FC = () => {
     { id: 'rub-2', title: 'Sayfa Düzeni ve Okunabilirlik', maxPoints: 30, description: 'Temiz ve anlaşılır yazı düzeni.' },
     { id: 'rub-3', title: 'Zamanında ve Eksiksiz Teslim', maxPoints: 30, description: 'Belirlenen tarihten önce tüm soruların bitirilmesi.' }
   ]);
+
+  const handleOpenCreateModal = () => {
+    setEditingHomework(null);
+    setTitle('');
+    setDescription('');
+    setSubject(currentUser?.branch || 'Matematik');
+    setTargetType('class');
+    setSelectedClasses(['Tüm Okul']);
+    setSelectedStudentIds([]);
+    setDueDate(new Date(Date.now() + 1000 * 60 * 60 * 24 * 4).toISOString().split('T')[0]);
+    setDueTime('23:59');
+    setMaxScore(100);
+    setXpReward(50);
+    setAttachments([]);
+    setEnableRubric(true);
+    setShowCreateModal(true);
+  };
+
+  const handleOpenEditModal = (hw: Homework) => {
+    setEditingHomework(hw);
+    setTitle(hw.title);
+    setDescription(hw.description);
+    setSubject(hw.subject);
+    setTargetType(hw.targetType || 'class');
+    setSelectedClasses(hw.targetClasses || (hw.targetClass ? [hw.targetClass] : ['Tüm Okul']));
+    setSelectedStudentIds(hw.targetStudentIds || []);
+    setDueDate(hw.dueDate);
+    setDueTime(hw.dueTime || '23:59');
+    setMaxScore(hw.maxScore || 100);
+    setXpReward(hw.xpReward || 50);
+    setAttachments(hw.attachments || []);
+    if (hw.rubric && hw.rubric.length > 0) {
+      setRubricItems(hw.rubric);
+      setEnableRubric(true);
+    } else {
+      setEnableRubric(false);
+    }
+    setShowCreateModal(true);
+  };
 
   // Filtered Homeworks
   const filteredHomeworks = homeworks.filter(hw => {
@@ -213,28 +254,48 @@ export const TeacherHomeworks: React.FC = () => {
       }
     }
 
-    const newHw: Homework = {
-      id: `hw-${Date.now()}`,
-      title: title.trim(),
-      subject: subject.trim(),
-      description: description.trim(),
-      teacherId: currentUser.uid,
-      teacherName: currentUser.displayName,
-      targetType: targetType,
-      targetClass: targetClassStr,
-      targetClasses: targetClassesArray,
-      targetStudentIds: targetType === 'student' ? selectedStudentIds : undefined,
-      dueDate: dueDate,
-      dueTime: dueTime,
-      maxScore: Number(maxScore) || 100,
-      xpReward: Number(xpReward) || 50,
-      attachments: attachments.length > 0 ? attachments : undefined,
-      rubric: enableRubric && rubricItems.length > 0 ? rubricItems : undefined,
-      createdAt: new Date().toISOString()
-    };
+    if (editingHomework) {
+      await dataService.updateHomework(editingHomework.id, {
+        title: title.trim(),
+        subject: subject.trim(),
+        description: description.trim(),
+        targetType: targetType,
+        targetClass: targetClassStr,
+        targetClasses: targetClassesArray,
+        targetStudentIds: targetType === 'student' ? selectedStudentIds : undefined,
+        dueDate: dueDate,
+        dueTime: dueTime,
+        maxScore: Number(maxScore) || 100,
+        xpReward: Number(xpReward) || 50,
+        attachments: attachments.length > 0 ? attachments : undefined,
+        rubric: enableRubric && rubricItems.length > 0 ? rubricItems : undefined,
+      });
+    } else {
+      const newHw: Homework = {
+        id: `hw-${Date.now()}`,
+        title: title.trim(),
+        subject: subject.trim(),
+        description: description.trim(),
+        teacherId: currentUser.uid,
+        teacherName: currentUser.displayName,
+        targetType: targetType,
+        targetClass: targetClassStr,
+        targetClasses: targetClassesArray,
+        targetStudentIds: targetType === 'student' ? selectedStudentIds : undefined,
+        dueDate: dueDate,
+        dueTime: dueTime,
+        maxScore: Number(maxScore) || 100,
+        xpReward: Number(xpReward) || 50,
+        attachments: attachments.length > 0 ? attachments : undefined,
+        rubric: enableRubric && rubricItems.length > 0 ? rubricItems : undefined,
+        createdAt: new Date().toISOString()
+      };
 
-    await dataService.addHomework(newHw);
+      await dataService.addHomework(newHw);
+    }
+
     setShowCreateModal(false);
+    setEditingHomework(null);
     setTitle('');
     setDescription('');
     setAttachments([]);
@@ -282,7 +343,7 @@ export const TeacherHomeworks: React.FC = () => {
 
           <button
             id="add-new-homework-btn"
-            onClick={() => setShowCreateModal(true)}
+            onClick={handleOpenCreateModal}
             className="py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-2 transition shadow-sm shadow-indigo-500/20"
           >
             <Plus className="w-4 h-4" />
@@ -321,13 +382,22 @@ export const TeacherHomeworks: React.FC = () => {
                       {hw.subject} • {hw.targetClass}
                     </span>
 
-                    <button
-                      onClick={() => handleDelete(hw.id)}
-                      className="text-slate-400 hover:text-rose-500 p-1 rounded-lg transition"
-                      title="Ödevi Sil"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleOpenEditModal(hw)}
+                        className="text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 p-1 rounded-lg transition"
+                        title="Ödevi Düzenle"
+                      >
+                        <Edit3 className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(hw.id)}
+                        className="text-slate-400 hover:text-rose-500 p-1 rounded-lg transition"
+                        title="Ödevi Sil"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
 
                   <h3 className="text-sm font-bold text-slate-900 dark:text-white leading-snug mb-1.5 line-clamp-2">
@@ -411,7 +481,7 @@ export const TeacherHomeworks: React.FC = () => {
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-800">
               <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <BookOpen className="w-5 h-5 text-indigo-500" />
-                Kapsamlı Ödev & Rubrik Oluşturucu
+                {editingHomework ? 'Ödevi Düzenle' : 'Kapsamlı Ödev & Rubrik Oluşturucu'}
               </h3>
               <button onClick={() => setShowCreateModal(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
@@ -818,7 +888,7 @@ export const TeacherHomeworks: React.FC = () => {
                   type="submit"
                   className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md shadow-indigo-500/20 transition"
                 >
-                  Ödevi Yayınla & Bildirim Gönder
+                  {editingHomework ? 'Değişiklikleri Kaydet' : 'Ödevi Yayınla & Bildirim Gönder'}
                 </button>
               </div>
             </form>
