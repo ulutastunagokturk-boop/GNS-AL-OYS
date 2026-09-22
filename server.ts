@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
@@ -459,8 +460,52 @@ async function syncAllToSupabaseRelationalTables(client: SupabaseClient, store: 
   return stats;
 }
 
-// ================= LIVE DATABASE REALTIME SSE & IN-MEMORY CACHE =================
-let inMemoryLatestState: any = null;
+// ================= LIVE DATABASE REALTIME SSE, DISK PERSISTENCE & IN-MEMORY CACHE =================
+const DATA_DIR = path.join(process.cwd(), 'data');
+const DB_FILE = path.join(DATA_DIR, 'school_database.json');
+
+function ensureDataDir() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  } catch {}
+}
+
+function loadPersistedState(): any | null {
+  try {
+    ensureDataDir();
+    if (fs.existsSync(DB_FILE)) {
+      const raw = fs.readFileSync(DB_FILE, 'utf-8');
+      if (raw && raw.trim()) {
+        const parsed = JSON.parse(raw);
+        console.log('[Server DB] Disk veritabanı başarıyla yüklendi:', {
+          users: parsed?.users?.length || 0,
+          classes: parsed?.classes?.length || 0,
+          announcements: parsed?.announcements?.length || 0,
+          homeworks: parsed?.homeworks?.length || 0
+        });
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.error('[Server DB] Diskten okuma hatası:', e);
+  }
+  return null;
+}
+
+function savePersistedState(state: any) {
+  try {
+    ensureDataDir();
+    if (state) {
+      fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2), 'utf-8');
+    }
+  } catch (e) {
+    console.error('[Server DB] Diske yazma hatası:', e);
+  }
+}
+
+let inMemoryLatestState: any = loadPersistedState();
 const sseClients = new Set<express.Response>();
 
 function broadcastStateUpdate(state: any, senderClientId?: string) {
@@ -771,14 +816,15 @@ app.post('/api/database/save', async (req, res) => {
   const { store, senderClientId } = req.body;
   const { client } = getSupabaseInfo();
 
-  // Instant in-memory cache update & SSE broadcast to all other open devices
+  // Instant in-memory cache update, disk persistence & SSE broadcast to all other open devices
   if (store) {
     inMemoryLatestState = store;
+    savePersistedState(store);
     broadcastStateUpdate(store, senderClientId);
   }
 
   if (!client) {
-    return res.json({ success: true, configured: false, message: 'Yerel bellek güncellendi, Supabase yapılandırılmamış' });
+    return res.json({ success: true, configured: false, message: 'Sunucu yerel veritabanına kaydedildi, Supabase yapılandırılmamış' });
   }
 
   const nowIso = new Date().toISOString();
@@ -1056,6 +1102,7 @@ app.post('/api/homeworks', async (req, res) => {
     }
   }
 
+  savePersistedState(inMemoryLatestState);
   broadcastStateUpdate(inMemoryLatestState);
   res.json({ success: true, homework: record });
 });
@@ -1108,6 +1155,7 @@ app.put('/api/homeworks/:id', async (req, res) => {
     }
   }
 
+  savePersistedState(inMemoryLatestState);
   broadcastStateUpdate(inMemoryLatestState);
   res.json({ success: true, homework: updatedHw });
 });
@@ -1139,7 +1187,10 @@ app.delete('/api/homeworks/:id', async (req, res) => {
     } catch {}
   }
 
-  if (inMemoryLatestState) broadcastStateUpdate(inMemoryLatestState);
+  if (inMemoryLatestState) {
+    savePersistedState(inMemoryLatestState);
+    broadcastStateUpdate(inMemoryLatestState);
+  }
   res.json({ success: true, message: 'Ödev silindi' });
 });
 
@@ -1210,6 +1261,7 @@ app.post('/api/homeworks/:id/submissions/status', async (req, res) => {
     } catch {}
   }
 
+  savePersistedState(inMemoryLatestState);
   broadcastStateUpdate(inMemoryLatestState);
   res.json({ success: true, submission: sub });
 });
@@ -1273,8 +1325,103 @@ app.post('/api/homeworks/:id/submit', async (req, res) => {
     } catch {}
   }
 
+  savePersistedState(inMemoryLatestState);
   broadcastStateUpdate(inMemoryLatestState);
   res.json({ success: true, submission: sub });
+});
+
+// ================= DUYURULAR (ANNOUNCEMENTS) ENDPOINTS =================
+app.get('/api/announcements', async (req, res) => {
+  const store = inMemoryLatestState;
+  const announcements = store?.announcements || [];
+  res.json({ success: true, announcements });
+});
+
+app.post('/api/announcements', async (req, res) => {
+  const record = req.body;
+  if (!record || !record.id) {
+    return res.status(400).json({ success: false, message: 'Geçersiz duyuru verisi' });
+  }
+
+  if (!inMemoryLatestState) {
+    inMemoryLatestState = { users: [], classes: [], homeworks: [], submissions: [], grades: [], attendance: [], announcements: [] };
+  }
+  if (!Array.isArray(inMemoryLatestState.announcements)) {
+    inMemoryLatestState.announcements = [];
+  }
+
+  const existingIdx = inMemoryLatestState.announcements.findIndex((a: any) => a.id === record.id);
+  if (existingIdx >= 0) {
+    inMemoryLatestState.announcements[existingIdx] = {
+      ...inMemoryLatestState.announcements[existingIdx],
+      ...record,
+      updatedAt: new Date().toISOString()
+    };
+  } else {
+    inMemoryLatestState.announcements.unshift({
+      ...record,
+      createdAt: record.createdAt || new Date().toISOString()
+    });
+  }
+
+  // Supabase update if client available
+  const { client } = getSupabaseInfo();
+  if (client) {
+    try {
+      await client.from('school_backups').insert({
+        backup_type: 'announcement_save',
+        stats: { totalAnnouncements: inMemoryLatestState.announcements.length },
+        payload: inMemoryLatestState,
+        created_at: new Date().toISOString()
+      });
+    } catch (e: any) {
+      console.warn('[Supabase Announcement Save Warn]:', e.message);
+    }
+  }
+
+  savePersistedState(inMemoryLatestState);
+  broadcastStateUpdate(inMemoryLatestState);
+  res.json({ success: true, announcement: record });
+});
+
+app.delete('/api/announcements/:id', async (req, res) => {
+  const { id } = req.params;
+  if (inMemoryLatestState && Array.isArray(inMemoryLatestState.announcements)) {
+    inMemoryLatestState.announcements = inMemoryLatestState.announcements.filter((a: any) => a.id !== id);
+  }
+
+  const { client } = getSupabaseInfo();
+  if (client && inMemoryLatestState) {
+    try {
+      await client.from('school_backups').insert({
+        backup_type: 'announcement_delete',
+        stats: { totalAnnouncements: inMemoryLatestState.announcements?.length || 0 },
+        payload: inMemoryLatestState,
+        created_at: new Date().toISOString()
+      });
+    } catch {}
+  }
+
+  if (inMemoryLatestState) {
+    savePersistedState(inMemoryLatestState);
+    broadcastStateUpdate(inMemoryLatestState);
+  }
+  res.json({ success: true, message: 'Duyuru silindi' });
+});
+
+app.post('/api/announcements/:id/pin', async (req, res) => {
+  const { id } = req.params;
+  if (inMemoryLatestState && Array.isArray(inMemoryLatestState.announcements)) {
+    const ann = inMemoryLatestState.announcements.find((a: any) => a.id === id);
+    if (ann) {
+      ann.pinned = !ann.pinned;
+      ann.updatedAt = new Date().toISOString();
+      savePersistedState(inMemoryLatestState);
+      broadcastStateUpdate(inMemoryLatestState);
+      return res.json({ success: true, pinned: ann.pinned });
+    }
+  }
+  res.status(404).json({ success: false, message: 'Duyuru bulunamadı' });
 });
 
 app.all('/api/*', (req, res) => {

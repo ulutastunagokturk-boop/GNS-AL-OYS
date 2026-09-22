@@ -197,7 +197,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
                   }`}
                 >
                   <Shield className="w-4 h-4 text-indigo-500 shrink-0" />
-                  <span className="truncate">Öğretmen</span>
+                  <span className="truncate">Öğretmen & İdare</span>
                 </button>
               </div>
 
@@ -318,6 +318,27 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
                   </div>
                 ) : (
                   <div className="space-y-4">
+                    {/* Quick Admin fill button */}
+                    <div className="bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 rounded-xl p-3 flex items-center justify-between">
+                      <div className="text-xs text-indigo-900 dark:text-indigo-200">
+                        <span className="font-bold flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300">
+                          <Shield className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                          Okul Yönetici Hesabı
+                        </span>
+                        <span className="text-[11px] text-slate-600 dark:text-slate-400">tlogixtr@gmail.com</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPhoneOrEmail('tlogixtr@gmail.com');
+                          setStaffPassword('Gnsial2026!Admin');
+                        }}
+                        className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-xs transition cursor-pointer"
+                      >
+                        Giriş Bilgilerini Doldur
+                      </button>
+                    </div>
+
                     <div>
                       <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                         Telefon Numarası veya Kurumsal E-Posta <span className="text-rose-500">*</span>
@@ -327,7 +348,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
                         <input
                           id="login-staff-input"
                           type="text"
-                          placeholder="Örn: 05321234567 veya ahmet.yilmaz@okul.k12.tr"
+                          placeholder="Örn: tlogixtr@gmail.com veya 05321234567"
                           value={phoneOrEmail}
                           onChange={(e) => setPhoneOrEmail(e.target.value)}
                           required
@@ -354,7 +375,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
                         <input
                           id="login-staff-password-input"
                           type={showStaffPassword ? 'text' : 'password'}
-                          placeholder="Şifrenizi giriniz"
+                          placeholder="Şifreniz (örn: Gnsial2026!Admin)"
                           value={staffPassword}
                           onChange={(e) => setStaffPassword(e.target.value)}
                           required

@@ -37,6 +37,7 @@ export const StudentAnnouncements: React.FC = () => {
       setStudentAnnouncements([...dataService.getAnnouncementsForStudent(currentUser.classGrade)]);
     };
     updateList();
+    dataService.syncAnnouncementsFromCloud().then(updateList);
     const unsub = dataService.subscribe(updateList);
     return unsub;
   }, [currentUser?.classGrade]);

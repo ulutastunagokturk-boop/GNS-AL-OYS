@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { dataService, normalizeClassName } from '../../services/dataService';
+import { dataService, normalizeClassName, isAllSchool } from '../../services/dataService';
 import { Announcement, AnnouncementPriority, TargetAudience, SchoolClass, UserProfile } from '../../types';
 import { AnnouncementEditorModal } from './AnnouncementEditorModal';
 import { AnnouncementViewersModal } from './AnnouncementViewersModal';
@@ -60,6 +60,12 @@ export const TeacherAnnouncements: React.FC = () => {
 
   // Subscribe to real-time data changes
   useEffect(() => {
+    dataService.syncAnnouncementsFromCloud().then(list => {
+      setAnnouncements([...list]);
+      setClasses([...dataService.getClasses()]);
+      setAllStudents([...dataService.getStudents()]);
+    });
+
     const refresh = () => {
       setAnnouncements([...dataService.getAnnouncements()]);
       setClasses([...dataService.getClasses()]);
@@ -108,13 +114,16 @@ export const TeacherAnnouncements: React.FC = () => {
       return allStudents.length;
     }
     if (ann.targetAudience === 'class') {
+      if (isAllSchool(ann.targetClass) || (ann.targetClasses && ann.targetClasses.some(c => isAllSchool(c)))) {
+        return allStudents.length;
+      }
       if (ann.targetClasses && ann.targetClasses.length > 0) {
         const normClasses = ann.targetClasses.map(c => normalizeClassName(c));
-        return allStudents.filter(s => s.classGrade && (normClasses.includes('tum-okul') || normClasses.includes(normalizeClassName(s.classGrade)))).length;
+        return allStudents.filter(s => s.classGrade && normClasses.includes(normalizeClassName(s.classGrade))).length;
       }
       if (ann.targetClass) {
         const parts = ann.targetClass.split(',').map(c => normalizeClassName(c.trim()));
-        return allStudents.filter(s => s.classGrade && (parts.includes('tum-okul') || parts.includes(normalizeClassName(s.classGrade)))).length;
+        return allStudents.filter(s => s.classGrade && parts.includes(normalizeClassName(s.classGrade))).length;
       }
     }
     return 0;
@@ -143,8 +152,9 @@ export const TeacherAnnouncements: React.FC = () => {
       a.targetAudience === 'all' ||
       a.targetAudience === 'students' ||
       (a.targetAudience === 'class' && (
-        (a.targetClasses && a.targetClasses.some(c => c === 'Tüm Okul' || normalizeClassName(c) === cleanFilter)) ||
-        (a.targetClass && a.targetClass.split(',').some(c => c.trim() === 'Tüm Okul' || normalizeClassName(c.trim()) === cleanFilter))
+        isAllSchool(a.targetClass) ||
+        (a.targetClasses && a.targetClasses.some(c => isAllSchool(c) || normalizeClassName(c) === cleanFilter)) ||
+        (a.targetClass && a.targetClass.split(',').some(c => isAllSchool(c) || normalizeClassName(c.trim()) === cleanFilter))
       ));
 
     return matchSearch && matchAudience && matchPriority && matchClass;

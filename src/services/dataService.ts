@@ -121,6 +121,15 @@ export function normalizeClassName(className?: string): string {
   return className.trim().toUpperCase().replace(/[\/\\]/g, '-').replace(/\s+/g, '-');
 }
 
+/**
+ * Checks if a class target string represents 'All School' (Tüm Okul)
+ */
+export function isAllSchool(str?: string): boolean {
+  if (!str) return false;
+  const s = str.trim().toLowerCase().replace(/[\s\-_/]/g, '');
+  return s === 'tumokul' || s === 'tümokul' || s === 'all' || s === 'herkes' || s === 'tum' || s === 'tüm';
+}
+
 const CACHE_STORAGE_KEY = 'gnisal_oys_v13_clean_slate';
 
 export interface LocalCacheStore {
@@ -602,6 +611,57 @@ class DataService {
     );
     this.saveCache(this.cache, false);
     this.notifySubscribers();
+  }
+
+  /**
+   * Hem sunucu API (/api/announcements) hem Firestore üzerinden duyuruları çeker ve yerel önbellekle birleştirir.
+   */
+  public async syncAnnouncementsFromCloud(): Promise<Announcement[]> {
+    let remoteAnnouncements: Announcement[] = [];
+
+    // 1. Fetch from Server API (/api/announcements)
+    try {
+      const res = await fetch('/api/announcements');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.announcements) && json.announcements.length > 0) {
+          remoteAnnouncements = json.announcements;
+        }
+      }
+    } catch (e) {
+      console.warn('[DataService] /api/announcements sync note:', e);
+    }
+
+    // 2. Fetch from Cloud Firestore (/announcements)
+    try {
+      const annSnap = await getDocs(collection(db, 'announcements'));
+      if (!annSnap.empty) {
+        const firestoreList: Announcement[] = [];
+        annSnap.forEach(d => {
+          firestoreList.push({ id: d.id, ...d.data() } as Announcement);
+        });
+        const map = new Map<string, Announcement>();
+        remoteAnnouncements.forEach(a => map.set(a.id, a));
+        firestoreList.forEach(a => map.set(a.id, a));
+        remoteAnnouncements = Array.from(map.values());
+      }
+    } catch (e) {
+      console.warn('[DataService] Firestore announcements sync note:', e);
+    }
+
+    // 3. Merge into local cache
+    if (remoteAnnouncements.length > 0) {
+      const map = new Map<string, Announcement>();
+      (this.cache.announcements || []).forEach(a => map.set(a.id, a));
+      remoteAnnouncements.forEach(a => map.set(a.id, a));
+      this.cache.announcements = Array.from(map.values()).sort(
+        (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+      );
+      this.saveCache(this.cache, false);
+      this.notifySubscribers();
+    }
+
+    return this.cache.announcements;
   }
 
   private ensureStarterDataIfEmpty() {
@@ -3202,6 +3262,16 @@ class DataService {
     );
 
     try {
+      await fetch('/api/announcements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(announcement)
+      });
+    } catch (e) {
+      console.warn('[DataService] Server announcement add note:', e);
+    }
+
+    try {
       await setDoc(doc(db, 'announcements', announcement.id), sanitizeForFirestore(announcement));
     } catch (e) {
       console.log('Firebase announcement write:', e);
@@ -3219,6 +3289,16 @@ class DataService {
     this.saveCache({ ...this.cache, announcements: updated });
 
     try {
+      await fetch('/api/announcements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedAnn)
+      });
+    } catch (e) {
+      console.warn('[DataService] Server announcement update note:', e);
+    }
+
+    try {
       await setDoc(doc(db, 'announcements', id), sanitizeForFirestore(updatedAnn), { merge: true });
     } catch (e) {
       console.log('Firebase update announcement error:', e);
@@ -3234,6 +3314,12 @@ class DataService {
     this.saveCache({ ...this.cache, announcements: updated });
 
     try {
+      await fetch(`/api/announcements/${id}/pin`, { method: 'POST' });
+    } catch (e) {
+      console.warn('[DataService] Server pin announcement note:', e);
+    }
+
+    try {
       await setDoc(doc(db, 'announcements', id), { pinned: newPinned }, { merge: true });
     } catch (e) {
       console.log('Firebase pin announcement error:', e);
@@ -3243,6 +3329,13 @@ class DataService {
   public async deleteAnnouncement(id: string): Promise<void> {
     const updated = this.cache.announcements.filter(a => a.id !== id);
     this.saveCache({ ...this.cache, announcements: updated });
+
+    try {
+      await fetch(`/api/announcements/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      console.warn('[DataService] Server delete announcement note:', e);
+    }
+
     try {
       await deleteDoc(doc(db, 'announcements', id));
     } catch (e) {
