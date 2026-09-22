@@ -29,15 +29,36 @@ export const SupabaseBackupManagerView: React.FC = () => {
   const [copiedSql, setCopiedSql] = useState(false);
   const [showSqlGuide, setShowSqlGuide] = useState(false);
 
+  // Google Cloud Firestore Live States
+  const [firestoreStats, setFirestoreStats] = useState<{
+    users: number;
+    classes: number;
+    announcements: number;
+    homeworks: number;
+    grades: number;
+    attendance: number;
+    schedules: number;
+  } | null>(null);
+  const [isFirestoreSyncing, setIsFirestoreSyncing] = useState(false);
+  const [isFirestorePulling, setIsFirestorePulling] = useState(false);
+  const [isFirestoreTesting, setIsFirestoreTesting] = useState(false);
+  const [firestoreTestResult, setFirestoreTestResult] = useState<{
+    success: boolean;
+    message: string;
+    latencyMs: number;
+  } | null>(null);
+
   const loadStatusAndHistory = async () => {
     setIsLoading(true);
     try {
-      const [currentStatus, history] = await Promise.all([
+      const [currentStatus, history, fStats] = await Promise.all([
         supabaseBackupService.getStatus(),
-        supabaseBackupService.getRecentBackups()
+        supabaseBackupService.getRecentBackups(),
+        dataService.getFirestoreStats()
       ]);
       setStatus(currentStatus);
       setRecentBackups(history);
+      setFirestoreStats(fStats);
     } catch (err) {
       console.error(err);
     } finally {
@@ -47,11 +68,89 @@ export const SupabaseBackupManagerView: React.FC = () => {
 
   useEffect(() => {
     loadStatusAndHistory();
+    // Test initial connection
+    dataService.testFirestoreConnection().then(res => setFirestoreTestResult(res)).catch(() => {});
+
     const unsubscribe = supabaseBackupService.subscribe(() => {
       setIsSyncing(supabaseBackupService.getIsSyncing());
     });
     return () => unsubscribe();
   }, []);
+
+  const handleFirestoreSyncAll = async () => {
+    setIsFirestoreSyncing(true);
+    setActionFeedback(null);
+    try {
+      const result = await dataService.forceSyncAllWithFirestore();
+      if (result.success) {
+        setActionFeedback({
+          type: 'success',
+          message: result.message
+        });
+        const updatedStats = await dataService.getFirestoreStats();
+        setFirestoreStats(updatedStats);
+      } else {
+        setActionFeedback({
+          type: 'error',
+          message: result.message || 'Firestore eşitleme hatası.'
+        });
+      }
+    } catch (e: any) {
+      setActionFeedback({
+        type: 'error',
+        message: 'Bulut eşitleme hatası: ' + (e?.message || String(e))
+      });
+    } finally {
+      setIsFirestoreSyncing(false);
+    }
+  };
+
+  const handleFirestorePullAll = async () => {
+    setIsFirestorePulling(true);
+    setActionFeedback(null);
+    try {
+      const result = await dataService.pullAllFromFirestore();
+      if (result.success) {
+        setActionFeedback({
+          type: 'success',
+          message: result.message
+        });
+        const updatedStats = await dataService.getFirestoreStats();
+        setFirestoreStats(updatedStats);
+      } else {
+        setActionFeedback({
+          type: 'error',
+          message: result.message || 'Buluttan veri çekme hatası.'
+        });
+      }
+    } catch (e: any) {
+      setActionFeedback({
+        type: 'error',
+        message: 'Veri çekme hatası: ' + (e?.message || String(e))
+      });
+    } finally {
+      setIsFirestorePulling(false);
+    }
+  };
+
+  const handleFirestoreTestPing = async () => {
+    setIsFirestoreTesting(true);
+    setFirestoreTestResult(null);
+    try {
+      const res = await dataService.testFirestoreConnection();
+      setFirestoreTestResult(res);
+      const updatedStats = await dataService.getFirestoreStats();
+      setFirestoreStats(updatedStats);
+    } catch (e: any) {
+      setFirestoreTestResult({
+        success: false,
+        message: 'Bağlantı hatası: ' + (e?.message || String(e)),
+        latencyMs: 0
+      });
+    } finally {
+      setIsFirestoreTesting(false);
+    }
+  };
 
   const [isTableSyncing, setIsTableSyncing] = useState(false);
 
@@ -180,6 +279,117 @@ export const SupabaseBackupManagerView: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* GOOGLE CLOUD FIRESTORE PRIMARY CLOUD CARD */}
+      <div className="bg-gradient-to-r from-blue-950/60 via-slate-900 to-indigo-950/70 rounded-3xl p-6 sm:p-7 border border-blue-500/30 shadow-xl relative overflow-hidden">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
+          <div className="space-y-2 max-w-2xl">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-bold tracking-wide">
+                <Database className="w-3.5 h-3.5 text-blue-400" />
+                <span>Google Cloud Firestore</span>
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>Canlı Bulut Senkronizasyonu Aktif</span>
+              </span>
+              {firestoreTestResult?.latencyMs !== undefined && firestoreTestResult.latencyMs > 0 && (
+                <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                  {firestoreTestResult.latencyMs} ms
+                </span>
+              )}
+            </div>
+
+            <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+              Google Cloud Firestore Canlı Veri Yönetimi
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+              Kullanıcılar, sınıflar, duyurular, ödevler ve notlar Google Cloud Firestore sunucularında kalıcı olarak saklanır. Değişiklikler anlık olarak diğer cihazlara iletilir.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <button
+              onClick={handleFirestoreTestPing}
+              disabled={isFirestoreTesting}
+              className="px-3.5 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
+              title="Google Cloud Firestore bağlantısını test eder ve yanıt süresini ölçer"
+            >
+              <Activity className={`w-4 h-4 text-emerald-400 ${isFirestoreTesting ? 'animate-spin' : ''}`} />
+              <span>{isFirestoreTesting ? 'Test Ediliyor...' : 'Bağlantıyı Test Et'}</span>
+            </button>
+
+            <button
+              onClick={handleFirestorePullAll}
+              disabled={isFirestorePulling || isFirestoreSyncing}
+              className="px-3.5 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-indigo-500/30 transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
+              title="Google Cloud Firestore'daki tüm verileri çekerek yerel arayüzü günceller"
+            >
+              <HardDriveDownload className={`w-4 h-4 text-indigo-400 ${isFirestorePulling ? 'animate-bounce' : ''}`} />
+              <span>{isFirestorePulling ? 'İndiriliyor...' : 'Buluttan Verileri Çek'}</span>
+            </button>
+
+            <button
+              onClick={handleFirestoreSyncAll}
+              disabled={isFirestoreSyncing || isFirestorePulling}
+              className="px-4 py-2.5 rounded-xl text-xs font-black bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/30 transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
+              title="Tüm kullanıcı, sınıf, duyuru, ödev, not ve ders programlarını Firestore'a aktarır"
+            >
+              <RefreshCw className={`w-4 h-4 ${isFirestoreSyncing ? 'animate-spin' : ''}`} />
+              <span>{isFirestoreSyncing ? 'Buluta Aktarılıyor...' : 'Tümünü Firestore\'a Yükle'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Firestore Stats Grid */}
+        <div className="mt-5 pt-4 border-t border-slate-800/80 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5 text-center">
+          <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Kullanıcılar</span>
+            <span className="text-lg font-black text-white">{firestoreStats?.users ?? '-'}</span>
+          </div>
+          <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Sınıflar</span>
+            <span className="text-lg font-black text-white">{firestoreStats?.classes ?? '-'}</span>
+          </div>
+          <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Duyurular</span>
+            <span className="text-lg font-black text-white">{firestoreStats?.announcements ?? '-'}</span>
+          </div>
+          <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Ödevler</span>
+            <span className="text-lg font-black text-white">{firestoreStats?.homeworks ?? '-'}</span>
+          </div>
+          <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Notlar</span>
+            <span className="text-lg font-black text-white">{firestoreStats?.grades ?? '-'}</span>
+          </div>
+          <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Yoklama</span>
+            <span className="text-lg font-black text-white">{firestoreStats?.attendance ?? '-'}</span>
+          </div>
+          <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Program Slotu</span>
+            <span className="text-lg font-black text-white">{firestoreStats?.schedules ?? '-'}</span>
+          </div>
+        </div>
+
+        {/* Firestore Ping Result */}
+        {firestoreTestResult && (
+          <div className={`mt-3 px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 ${
+            firestoreTestResult.success 
+              ? 'bg-emerald-950/40 text-emerald-300 border border-emerald-500/20' 
+              : 'bg-rose-950/40 text-rose-300 border border-rose-500/20'
+          }`}>
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{firestoreTestResult.message}</span>
+            </div>
+            {firestoreTestResult.latencyMs > 0 && (
+              <span className="font-mono text-[11px] opacity-75">{firestoreTestResult.latencyMs} ms</span>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Top Banner & Overview */}
       <div className="bg-gradient-to-r from-emerald-950/40 via-slate-900 to-slate-900 rounded-3xl p-6 border border-emerald-500/20 shadow-xs relative overflow-hidden">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">

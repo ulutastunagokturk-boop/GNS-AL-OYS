@@ -28,6 +28,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
   const { 
     loginWithPhoneOrEmail, 
     loginWithSchoolNumber,
+    loginStaff,
     loginParent
   } = useAuth();
 
@@ -45,6 +46,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
 
   // Login inputs
   const [phoneOrEmail, setPhoneOrEmail] = useState('');
+  const [staffPassword, setStaffPassword] = useState('');
+  const [showStaffPassword, setShowStaffPassword] = useState(false);
   const [schoolNumber, setSchoolNumber] = useState('');
   const [studentPassword, setStudentPassword] = useState('');
   const [showStudentPassword, setShowStudentPassword] = useState(false);
@@ -91,7 +94,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
         if (!phoneOrEmail.trim()) {
           throw new Error('Lütfen telefon numaranızı veya kurumsal e-posta adresinizi giriniz.');
         }
-        await loginWithPhoneOrEmail(phoneOrEmail, undefined, rememberMe);
+        if (!staffPassword.trim()) {
+          throw new Error('Lütfen öğretmen / idareci giriş şifrenizi giriniz.');
+        }
+        await loginStaff(phoneOrEmail, staffPassword, rememberMe);
       }
     } catch (err: any) {
       setError(err.message || 'Giriş yapılamadı.');
@@ -311,25 +317,63 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onViewSchedule }) => {
                     </div>
                   </div>
                 ) : (
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                      Telefon Numarası veya Kurumsal E-Posta <span className="text-rose-500">*</span>
-                    </label>
-                    <div className="relative">
-                      <Phone className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-400" />
-                      <input
-                        id="login-staff-input"
-                        type="text"
-                        placeholder="Telefon numarası veya e-posta giriniz"
-                        value={phoneOrEmail}
-                        onChange={(e) => setPhoneOrEmail(e.target.value)}
-                        required
-                        className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none transition shadow-2xs"
-                      />
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                        Telefon Numarası veya Kurumsal E-Posta <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <Phone className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-400" />
+                        <input
+                          id="login-staff-input"
+                          type="text"
+                          placeholder="Örn: 05321234567 veya ahmet.yilmaz@okul.k12.tr"
+                          value={phoneOrEmail}
+                          onChange={(e) => setPhoneOrEmail(e.target.value)}
+                          required
+                          className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none transition shadow-2xs font-mono"
+                        />
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Sisteme kayıtlı telefon numaranız veya kurumsal e-posta adresiniz.
+                      </p>
                     </div>
-                    <p className="text-[11px] text-slate-400 mt-1.5">
-                      Sisteme kayıtlı telefon numaranız veya e-posta adresiniz ile giriş yapabilirsiniz.
-                    </p>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                          Öğretmen / İdareci Giriş Şifresi <span className="text-rose-500">*</span>
+                        </label>
+                        <span className="text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold flex items-center gap-1">
+                          <Shield className="w-3 h-3 text-indigo-500" />
+                          Güvenli Giriş
+                        </span>
+                      </div>
+                      <div className="relative">
+                        <Lock className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-400" />
+                        <input
+                          id="login-staff-password-input"
+                          type={showStaffPassword ? 'text' : 'password'}
+                          placeholder="Şifrenizi giriniz"
+                          value={staffPassword}
+                          onChange={(e) => setStaffPassword(e.target.value)}
+                          required
+                          className="w-full pl-10 pr-11 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none transition shadow-2xs font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowStaffPassword(!showStaffPassword)}
+                          className="absolute right-3 top-3 p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition cursor-pointer"
+                          title={showStaffPassword ? 'Şifreyi Gizle' : 'Şifreyi Göster'}
+                        >
+                          {showStaffPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5 flex items-center gap-1.5">
+                        <span className="text-indigo-500">🔒</span>
+                        <span>Okul idaresi tarafından şahsınıza tanımlanan güvenli giriş şifrenizi kullanınız.</span>
+                      </p>
+                    </div>
                   </div>
                 )}
 

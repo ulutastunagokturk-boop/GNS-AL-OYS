@@ -126,6 +126,25 @@ service cloud.firestore {
       allow write: if isAdmin() || !isAuthenticated();
     }
 
+    // Weekly Schedules
+    match /schedules/{scheduleId} {
+      allow read: if true;
+      allow write: if isAdmin() || isTeacher() || !isAuthenticated();
+    }
+
+    // Chat & Messaging
+    match /conversations/{convId} {
+      allow read, write: if isAuthenticated() || !isAuthenticated();
+    }
+    match /chat_messages/{msgId} {
+      allow read, write: if isAuthenticated() || !isAuthenticated();
+    }
+
+    // Health & Latency Diagnostics
+    match /_health/{healthId} {
+      allow read, write: if true;
+    }
+
     match /system_logs/{logId} {
       allow read: if isAdmin() || !isAuthenticated();
       allow write: if isAuthenticated() || !isAuthenticated();

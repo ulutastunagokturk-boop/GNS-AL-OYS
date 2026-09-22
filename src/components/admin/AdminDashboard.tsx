@@ -3,6 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
 import { UserProfile, SchoolClass, RoleAssignment, UserRole } from '../../types';
 import { WeeklyScheduleView } from '../schedule/WeeklyScheduleView';
+import { SupabaseBackupManagerView } from './SupabaseBackupManagerView';
 import { 
   ShieldCheck, 
   Users, 
@@ -44,7 +45,7 @@ import { ExcelStudentImportModal } from './ExcelStudentImportModal';
 import { ExcelParentImportModal } from './ExcelParentImportModal';
 import { generateUniqueStudentPassword, PasswordStyle } from '../../utils/passwordGenerator';
 
-export type AdminTab = 'overview' | 'users' | 'parents' | 'roles' | 'classes' | 'schedule';
+export type AdminTab = 'overview' | 'users' | 'parents' | 'roles' | 'classes' | 'schedule' | 'cloud-sync';
 
 interface AdminDashboardProps {
   activeTab?: string;
@@ -151,15 +152,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     ]
   };
 
+  // Custom Password Modal state for any user (teacher, admin, student, parent)
+  const [passwordModalUser, setPasswordModalUser] = useState<UserProfile | null>(null);
+  const [modalNewPassword, setModalNewPassword] = useState('');
+  const [modalShowPassword, setModalShowPassword] = useState(true);
+
   const handleRoleSelect = (role: 'student' | 'teacher' | 'admin' | 'parent') => {
     setNewUserRole(role);
     setSelectedPermissions(rolePermissionTemplates[role] || []);
-    if (role === 'student' && !newUserPassword) {
+    
+    // Automatically generate a role-appropriate default password
+    if (role === 'student') {
       setNewUserPassword(generateUniqueStudentPassword({ style: 'school', schoolNumber: newUserSchoolNumber || undefined }));
-    } else if (role === 'parent' && !newUserPassword) {
+    } else if (role === 'parent') {
       const cleanDigits = newUserPhone.replace(/\D/g, '');
       const lastDigits = cleanDigits.slice(-4) || `${Math.floor(1000 + Math.random() * 9000)}`;
       setNewUserPassword(`veli${lastDigits}`);
+    } else if (role === 'teacher') {
+      const rand = Math.floor(1000 + Math.random() * 9000);
+      setNewUserPassword(`Gns-${rand}!Tch`);
+    } else if (role === 'admin') {
+      const rand = Math.floor(1000 + Math.random() * 9000);
+      setNewUserPassword(`Gns-${rand}!Adm`);
     }
   };
 
@@ -167,6 +181,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (newUserRole === 'parent') {
       const lastDigits = Math.floor(1000 + Math.random() * 9000);
       setNewUserPassword(`veli${lastDigits}`);
+      setNewUserPasswordCopied(false);
+      return;
+    }
+    if (newUserRole === 'teacher') {
+      const rand = Math.floor(1000 + Math.random() * 9000);
+      setNewUserPassword(`Gns-${rand}!Tch`);
+      setNewUserPasswordCopied(false);
+      return;
+    }
+    if (newUserRole === 'admin') {
+      const rand = Math.floor(1000 + Math.random() * 9000);
+      setNewUserPassword(`Gns-${rand}!Adm`);
       setNewUserPasswordCopied(false);
       return;
     }
@@ -189,6 +215,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     navigator.clipboard.writeText(text);
     setCopiedTablePasswordUid(uid);
     setTimeout(() => setCopiedTablePasswordUid(null), 2000);
+  };
+
+  const handleOpenChangePasswordModal = (targetUser: UserProfile) => {
+    setPasswordModalUser(targetUser);
+    let initialPass = '';
+    if (targetUser.role === 'teacher') {
+      initialPass = `Gns-${Math.floor(1000 + Math.random() * 9000)}!Tch`;
+    } else if (targetUser.role === 'admin') {
+      initialPass = `Gns-${Math.floor(1000 + Math.random() * 9000)}!Adm`;
+    } else if (targetUser.role === 'student') {
+      initialPass = generateUniqueStudentPassword({ style: 'school', schoolNumber: targetUser.schoolNumber });
+    } else {
+      initialPass = `veli${Math.floor(1000 + Math.random() * 9000)}`;
+    }
+    setModalNewPassword(initialPass);
+    setModalShowPassword(true);
+  };
+
+  const handleSaveModalPassword = async () => {
+    if (!passwordModalUser || !modalNewPassword.trim()) return;
+    const adminName = currentUser?.displayName || 'Sistem Yöneticisi';
+    await dataService.resetUserPassword(passwordModalUser.uid, modalNewPassword.trim(), adminName);
+    setAddUserSuccess(`✓ "${passwordModalUser.displayName}" için yeni giriş şifresi kaydedildi: ${modalNewPassword.trim()}`);
+    setPasswordModalUser(null);
+    setTimeout(() => setAddUserSuccess(null), 4000);
   };
 
   const handleReassignStudentPasswordInTable = async (student: UserProfile) => {
@@ -463,9 +514,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsSubmittingRole(true);
     try {
       const adminName = currentUser?.displayName || 'Sistem Yöneticisi';
-      const finalStudentPassword = newUserRole === 'student' 
-        ? (newUserPassword.trim() || generateUniqueStudentPassword({ style: 'school', schoolNumber: assignedSchoolNo }))
-        : (newUserPassword.trim() || undefined);
+      const finalAssignedPassword = newUserPassword.trim() || (
+        newUserRole === 'student'
+          ? generateUniqueStudentPassword({ style: 'school', schoolNumber: assignedSchoolNo })
+          : newUserRole === 'teacher'
+          ? `Gns-${Math.floor(1000 + Math.random() * 9000)}!Tch`
+          : newUserRole === 'admin'
+          ? `Gns-${Math.floor(1000 + Math.random() * 9000)}!Adm`
+          : `veli${Math.floor(1000 + Math.random() * 9000)}`
+      );
 
       const result = await dataService.assignUserRole({
         userName: newUserName.trim(),
@@ -478,15 +535,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         notes: newUserNotes.trim() || (newUserRole === 'admin' ? `${newUserAdminTitle} idari görev yetkilendirmesi` : undefined),
         assignedBy: adminName,
         permissions: selectedPermissions,
-        password: finalStudentPassword
+        password: finalAssignedPassword
       });
 
       setAddUserSuccess(
         newUserRole === 'admin'
-          ? `✓ "${result.user.displayName}" başarıyla yeni Yönetici (Admin - ${newUserAdminTitle}) olarak atandı ve yetkilendirildi!`
+          ? `✓ "${result.user.displayName}" başarıyla yeni Yönetici (${newUserAdminTitle}) olarak atandı! Giriş Şifresi: "${result.user.password}"`
           : newUserRole === 'student'
           ? `✓ Öğrenci "${result.user.displayName}" (#${result.user.schoolNumber}) oluşturuldu. Giriş Şifresi: "${result.user.password}"`
-          : `✓ "${result.user.displayName}" için Öğretmen rolü başarıyla tanımlandı ve Firestore veritabanına kaydedildi!`
+          : `✓ Öğretmen "${result.user.displayName}" (${newUserBranch}) hesabı oluşturuldu. Giriş Şifresi: "${result.user.password}"`
       );
       
       setIsAddUserModalOpen(false);
@@ -700,6 +757,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <Clock className="w-4 h-4" />
           Ders Saatleri Çizelgesi
         </button>
+
+        <button
+          id="admin-tab-cloud-sync-btn"
+          onClick={() => setActiveTab('cloud-sync')}
+          className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold rounded-xl whitespace-nowrap transition cursor-pointer ${
+            activeTab === 'cloud-sync'
+              ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <Database className="w-4 h-4 text-blue-400" />
+          Bulut & Firestore Eşitleme
+        </button>
       </div>
 
       {/* OVERVIEW TAB */}
@@ -801,9 +871,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-emerald-400 text-xs font-bold shrink-0">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span>Otomatik Senkronizasyon Açık</span>
+            <div className="flex items-center gap-3 shrink-0 flex-wrap">
+              <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-emerald-400 text-xs font-bold shrink-0">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>Çift Bulut (Dual-Cloud) Aktif</span>
+              </div>
+              <button
+                onClick={() => setActiveTab('cloud-sync')}
+                className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 transition shadow-sm cursor-pointer"
+              >
+                <Database className="w-3.5 h-3.5" />
+                <span>Bulut Yönetimine Git</span>
+              </button>
             </div>
           </div>
 
@@ -1190,41 +1269,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </span>
                       </td>
                       <td className="py-3 px-4">
-                        {u.role === 'student' || u.role === 'parent' ? (
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40">
-                              {visibleTablePasswordUid === u.uid ? (u.password || 'Gns2026!') : '••••••'}
-                            </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40">
+                            {visibleTablePasswordUid === u.uid ? (u.password || (u.role === 'admin' ? 'Gnsial2026!Admin' : 'Gns2026!')) : '••••••••'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setVisibleTablePasswordUid(visibleTablePasswordUid === u.uid ? null : u.uid)}
+                            className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition cursor-pointer"
+                            title={visibleTablePasswordUid === u.uid ? 'Şifreyi Gizle' : 'Şifreyi Göster'}
+                          >
+                            {visibleTablePasswordUid === u.uid ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyTablePassword(u.uid, u.password || (u.role === 'admin' ? 'Gnsial2026!Admin' : 'Gns2026!'))}
+                            className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition cursor-pointer"
+                            title="Şifreyi Kopyala"
+                          >
+                            {copiedTablePasswordUid === u.uid ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenChangePasswordModal(u)}
+                            className="p-1 rounded bg-amber-100 hover:bg-amber-200 dark:bg-amber-950 dark:hover:bg-amber-900 text-amber-700 dark:text-amber-300 transition cursor-pointer"
+                            title={`${u.displayName} için Şifre Belirle / Değiştir`}
+                          >
+                            <KeyRound className="w-3.5 h-3.5" />
+                          </button>
+                          {u.role === 'student' && (
                             <button
                               type="button"
-                              onClick={() => setVisibleTablePasswordUid(visibleTablePasswordUid === u.uid ? null : u.uid)}
-                              className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition cursor-pointer"
-                              title={visibleTablePasswordUid === u.uid ? 'Şifreyi Gizle' : 'Şifreyi Göster'}
+                              onClick={() => handleReassignStudentPasswordInTable(u)}
+                              className="p-1 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 transition cursor-pointer"
+                              title="Hızlı Eşsiz Şifre Üret"
                             >
-                              {visibleTablePasswordUid === u.uid ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                              <RefreshCw className="w-3 h-3" />
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleCopyTablePassword(u.uid, u.password || 'Gns2026!')}
-                              className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition cursor-pointer"
-                              title="Şifreyi Kopyala"
-                            >
-                              {copiedTablePasswordUid === u.uid ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                            </button>
-                            {u.role === 'student' && (
-                              <button
-                                type="button"
-                                onClick={() => handleReassignStudentPasswordInTable(u)}
-                                className="p-1 rounded bg-amber-100 hover:bg-amber-200 dark:bg-amber-950 dark:hover:bg-amber-900 text-amber-700 dark:text-amber-300 transition cursor-pointer"
-                                title="Yeni Eşsiz Şifre Ata"
-                              >
-                                <RefreshCw className="w-3 h-3" />
-                              </button>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-[11px] text-slate-400 font-mono italic">SMS / E-Posta</span>
-                        )}
+                          )}
+                        </div>
                       </td>
                       <td className="py-3 px-4">
                         {isRootAdmin ? (
@@ -1816,6 +1899,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
+      {/* CLOUD & FIRESTORE SYNC TAB */}
+      {activeTab === 'cloud-sync' && (
+        <div className="space-y-4 animate-in fade-in">
+          <SupabaseBackupManagerView />
+        </div>
+      )}
+
       {/* ADD / EDIT CLASS MODAL */}
       {isClassModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in">
@@ -2300,86 +2390,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       )}
                     </div>
                   </div>
-
-                  {/* Öğrenci Giriş Şifresi Tanımlama & Eşsiz Şifre Üretici */}
-                  <div className="p-3.5 rounded-2xl bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 text-xs">
-                        <KeyRound className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-                        <span>Öğrenci Giriş Şifresi Tanımla</span>
-                        <span className="text-rose-500">*</span>
-                      </label>
-                      <span className="text-[10px] text-amber-800 dark:text-amber-300 font-semibold">
-                        Girişte Okul No + Şifre Zorunludur
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <div className="relative flex-1">
-                        <input
-                          type={showNewUserPassword ? 'text' : 'password'}
-                          value={newUserPassword}
-                          onChange={(e) => setNewUserPassword(e.target.value)}
-                          placeholder="Öğrenci şifresi (Örn: Gns-4821#k)"
-                          required
-                          className="w-full pl-3.5 pr-10 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs font-mono font-bold text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-amber-500"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowNewUserPassword(!showNewUserPassword)}
-                          className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
-                          title={showNewUserPassword ? 'Şifreyi Gizle' : 'Şifreyi Göster'}
-                        >
-                          {showNewUserPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                        </button>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleGenerateNewUserPassword('school')}
-                        className="px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer shrink-0"
-                        title="Her tıklamada eşsiz tahmin edilemez yeni bir şifre üretir"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span>Eşsiz Şifre Üret</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={handleCopyNewUserPassword}
-                        className="px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs flex items-center gap-1 transition cursor-pointer shrink-0"
-                        title="Şifreyi Kopyala"
-                      >
-                        {newUserPasswordCopied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                        <span>{newUserPasswordCopied ? 'Kopyalandı' : 'Kopyala'}</span>
-                      </button>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Hızlı Format:</span>
-                      <button
-                        type="button"
-                        onClick={() => handleGenerateNewUserPassword('school')}
-                        className="text-[10px] px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-semibold hover:border-amber-400 text-slate-700 dark:text-slate-300 transition cursor-pointer"
-                      >
-                        Okul Formatı
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleGenerateNewUserPassword('memorable')}
-                        className="text-[10px] px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-semibold hover:border-amber-400 text-slate-700 dark:text-slate-300 transition cursor-pointer"
-                      >
-                        Kelime & Sayı
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleGenerateNewUserPassword('pin')}
-                        className="text-[10px] px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-semibold hover:border-amber-400 text-slate-700 dark:text-slate-300 transition cursor-pointer"
-                      >
-                        6 Haneli PIN
-                      </button>
-                    </div>
-                  </div>
                 </div>
               )}
 
@@ -2406,6 +2416,98 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </select>
                 </div>
               )}
+
+              {/* Kullanıcı Giriş Şifresi Tanımlama & Eşsiz Şifre Üretici (Öğretmen, Yönetici, Öğrenci ve Veli için) */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 text-xs">
+                    <KeyRound className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                    <span>
+                      {newUserRole === 'teacher' ? 'Öğretmen Giriş Şifresi Belirle' :
+                       newUserRole === 'admin' ? 'Yönetici (Admin) Giriş Şifresi Belirle' :
+                       newUserRole === 'parent' ? 'Veli Giriş Şifresi Tanımla' :
+                       'Öğrenci Giriş Şifresi Tanımla'}
+                    </span>
+                    <span className="text-rose-500">*</span>
+                  </label>
+                  <span className="text-[10px] text-amber-800 dark:text-amber-300 font-semibold">
+                    {newUserRole === 'student' ? 'Girişte Okul No + Şifre Zorunludur' :
+                     newUserRole === 'parent' ? 'Girişte Telefon + Şifre Zorunludur' :
+                     'Admin Tarafından Doğrudan Atanır'}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type={showNewUserPassword ? 'text' : 'password'}
+                      value={newUserPassword}
+                      onChange={(e) => setNewUserPassword(e.target.value)}
+                      placeholder={
+                        newUserRole === 'teacher' ? 'Örn: Gns-4821!Tch' :
+                        newUserRole === 'admin' ? 'Örn: Gns-9102!Adm' :
+                        newUserRole === 'parent' ? 'Örn: veli4821' :
+                        'Örn: Gns-4821#k'
+                      }
+                      required
+                      className="w-full pl-3.5 pr-10 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs font-mono font-bold text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewUserPassword(!showNewUserPassword)}
+                      className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
+                      title={showNewUserPassword ? 'Şifreyi Gizle' : 'Şifreyi Göster'}
+                    >
+                      {showNewUserPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleGenerateNewUserPassword(newUserRole === 'student' ? 'school' : 'memorable')}
+                    className="px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer shrink-0"
+                    title="Her tıklamada eşsiz tahmin edilemez yeni bir şifre üretir"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Eşsiz Şifre Üret</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleCopyNewUserPassword}
+                    className="px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs flex items-center gap-1 transition cursor-pointer shrink-0"
+                    title="Şifreyi Kopyala"
+                  >
+                    {newUserPasswordCopied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{newUserPasswordCopied ? 'Kopyalandı' : 'Kopyala'}</span>
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Hızlı Format:</span>
+                  <button
+                    type="button"
+                    onClick={() => handleGenerateNewUserPassword('school')}
+                    className="text-[10px] px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-semibold hover:border-amber-400 text-slate-700 dark:text-slate-300 transition cursor-pointer"
+                  >
+                    {newUserRole === 'teacher' ? 'Öğretmen Formatı' : newUserRole === 'admin' ? 'Admin Formatı' : 'Okul Formatı'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleGenerateNewUserPassword('memorable')}
+                    className="text-[10px] px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-semibold hover:border-amber-400 text-slate-700 dark:text-slate-300 transition cursor-pointer"
+                  >
+                    Güçlü Karmaşık
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleGenerateNewUserPassword('pin')}
+                    className="text-[10px] px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-semibold hover:border-amber-400 text-slate-700 dark:text-slate-300 transition cursor-pointer"
+                  >
+                    6 Haneli PIN
+                  </button>
+                </div>
+              </div>
 
               {/* Permissions Checklist */}
               <div>
@@ -2618,6 +2720,130 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 className="px-4 py-2 text-xs font-bold rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 transition cursor-pointer"
               >
                 Kapat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADMIN ŞİFRE DEĞİŞTİRME & ATAMA MODALI (Öğretmen, Yönetici, Öğrenci ve Veli için) */}
+      {passwordModalUser && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-amber-100 dark:bg-amber-950 text-amber-600 dark:text-amber-400">
+                  <KeyRound className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-sm">Giriş Şifresi Belirle / Değiştir</h3>
+                  <p className="text-xs text-slate-500">{passwordModalUser.displayName}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setPasswordModalUser(null)}
+                className="p-1 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className={`text-xs px-2.5 py-1 rounded-lg font-bold ${
+                passwordModalUser.role === 'admin'
+                  ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300'
+                  : passwordModalUser.role === 'teacher'
+                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+                  : passwordModalUser.role === 'parent'
+                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                  : 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+              }`}>
+                {passwordModalUser.role === 'admin' ? `Yönetici (Admin) ${passwordModalUser.branch ? `- ${passwordModalUser.branch}` : ''}` :
+                 passwordModalUser.role === 'teacher' ? `Öğretmen - ${passwordModalUser.branch || 'Genel'}` :
+                 passwordModalUser.role === 'parent' ? 'Veli Hesabı' :
+                 `Öğrenci - ${passwordModalUser.classGrade || ''} (#${passwordModalUser.schoolNumber || ''})`}
+              </span>
+              <span className="text-[11px] text-slate-400 font-mono truncate">{passwordModalUser.email}</span>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
+                Yeni Giriş Şifresi
+              </label>
+              <div className="relative">
+                <input
+                  type={modalShowPassword ? 'text' : 'password'}
+                  value={modalNewPassword}
+                  onChange={(e) => setModalNewPassword(e.target.value)}
+                  placeholder="Yeni şifre girin veya üretin"
+                  className="w-full pl-3.5 pr-10 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm font-mono font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-amber-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setModalShowPassword(!modalShowPassword)}
+                  className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
+                >
+                  {modalShowPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <span className="text-[10px] text-slate-400 font-semibold">Hızlı Şifre Üret:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  const rand = Math.floor(1000 + Math.random() * 9000);
+                  if (passwordModalUser.role === 'teacher') {
+                    setModalNewPassword(`Gns-${rand}!Tch`);
+                  } else if (passwordModalUser.role === 'admin') {
+                    setModalNewPassword(`Gns-${rand}!Adm`);
+                  } else if (passwordModalUser.role === 'parent') {
+                    setModalNewPassword(`veli${rand}`);
+                  } else {
+                    setModalNewPassword(generateUniqueStudentPassword({ style: 'school', schoolNumber: passwordModalUser.schoolNumber }));
+                  }
+                }}
+                className="text-[10px] px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold transition cursor-pointer"
+              >
+                Rol Formatı
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setModalNewPassword(generateUniqueStudentPassword({ style: 'memorable' }));
+                }}
+                className="text-[10px] px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold transition cursor-pointer"
+              >
+                Karmaşık Güçlü
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setModalNewPassword(generateUniqueStudentPassword({ style: 'pin' }));
+                }}
+                className="text-[10px] px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold transition cursor-pointer"
+              >
+                6 Haneli PIN
+              </button>
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPasswordModalUser(null)}
+                className="px-4 py-2 text-xs font-bold rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 transition cursor-pointer"
+              >
+                İptal
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveModalPassword}
+                disabled={!modalNewPassword.trim()}
+                className="px-4 py-2 text-xs font-bold rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>Şifreyi Kaydet ve Ata</span>
               </button>
             </div>
           </div>

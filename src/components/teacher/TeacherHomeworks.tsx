@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { dataService, normalizeClassName } from '../../services/dataService';
+import { homeworkService } from '../../services/homeworkService';
 import { Homework, HomeworkSubmission, HomeworkStatus, RubricItem, Attachment, UserProfile, SchoolClass } from '../../types';
 import { 
   BookOpen, 
@@ -56,13 +57,20 @@ const STANDARD_SUBJECTS = [
 export const TeacherHomeworks: React.FC = () => {
   const { currentUser } = useAuth();
   const [classes, setClasses] = useState<SchoolClass[]>(() => dataService.getClasses());
-  const [homeworks, setHomeworks] = useState<Homework[]>(() => dataService.getHomeworks());
+  const [homeworks, setHomeworks] = useState<Homework[]>(() => homeworkService.getHomeworks());
   const [allStudents, setAllStudents] = useState<UserProfile[]>(() => dataService.getStudents());
 
   useEffect(() => {
-    const unsub = dataService.subscribe(() => {
+    // Bulut (Supabase & Firestore) ile çift yönlü ödev eşitlemesi
+    homeworkService.syncHomeworksFromCloud().then(hwList => {
+      setHomeworks([...hwList]);
       setClasses([...dataService.getClasses()]);
-      setHomeworks([...dataService.getHomeworks()]);
+      setAllStudents([...dataService.getStudents()]);
+    });
+
+    const unsub = homeworkService.subscribe(() => {
+      setClasses([...dataService.getClasses()]);
+      setHomeworks([...homeworkService.getHomeworks()]);
       setAllStudents([...dataService.getStudents()]);
     });
     return unsub;
@@ -257,7 +265,7 @@ export const TeacherHomeworks: React.FC = () => {
     }
 
     if (editingHomework) {
-      await dataService.updateHomework(editingHomework.id, {
+      await homeworkService.updateHomework(editingHomework.id, {
         title: title.trim(),
         subject: subject.trim(),
         description: description.trim(),
@@ -293,7 +301,7 @@ export const TeacherHomeworks: React.FC = () => {
         createdAt: new Date().toISOString()
       };
 
-      await dataService.addHomework(newHw);
+      await homeworkService.createHomework(newHw);
     }
 
     setShowCreateModal(false);
@@ -315,7 +323,7 @@ export const TeacherHomeworks: React.FC = () => {
 
   const confirmDeleteHw = async () => {
     if (!deleteConfirmHw) return;
-    await dataService.deleteHomework(deleteConfirmHw.id);
+    await homeworkService.deleteHomework(deleteConfirmHw.id);
     setDeleteConfirmHw(null);
   };
 
@@ -368,7 +376,7 @@ export const TeacherHomeworks: React.FC = () => {
           </div>
         ) : (
           filteredHomeworks.map((hw) => {
-            const submissions = dataService.getSubmissionsForHomework(hw.id);
+            const submissions = homeworkService.getSubmissionsForHomework(hw.id);
             const total = submissions.length;
             const completedCount = submissions.filter(s => s.status === 'completed').length;
             const notCompletedCount = submissions.filter(s => s.status === 'not_completed').length;
@@ -957,7 +965,7 @@ const HomeworkTrackingReportModal: React.FC<{
 }> = ({ homework, onClose }) => {
   const { currentUser } = useAuth();
   const [submissions, setSubmissions] = useState<HomeworkSubmission[]>(() => 
-    dataService.getSubmissionsForHomework(homework.id)
+    homeworkService.getSubmissionsForHomework(homework.id)
   );
   const [searchFilter, setSearchFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -968,12 +976,12 @@ const HomeworkTrackingReportModal: React.FC<{
   const [teacherFeedbackText, setTeacherFeedbackText] = useState('');
 
   const reloadSubmissions = () => {
-    setSubmissions([...dataService.getSubmissionsForHomework(homework.id)]);
+    setSubmissions([...homeworkService.getSubmissionsForHomework(homework.id)]);
   };
 
   useEffect(() => {
     reloadSubmissions();
-    const unsub = dataService.subscribe(reloadSubmissions);
+    const unsub = homeworkService.subscribe(reloadSubmissions);
     return unsub;
   }, [homework.id]);
 
@@ -982,7 +990,7 @@ const HomeworkTrackingReportModal: React.FC<{
     newStatus: HomeworkStatus, 
     score?: number
   ) => {
-    await dataService.updateSubmissionStatus(
+    await homeworkService.updateStudentSubmissionStatus(
       homework.id, 
       studentId, 
       newStatus, 
@@ -996,7 +1004,7 @@ const HomeworkTrackingReportModal: React.FC<{
 
   const handleSetAllCompleted = async () => {
     for (const sub of submissions) {
-      await dataService.updateSubmissionStatus(
+      await homeworkService.updateStudentSubmissionStatus(
         homework.id, 
         sub.studentId, 
         'completed', 
@@ -1035,7 +1043,7 @@ const HomeworkTrackingReportModal: React.FC<{
       calculatedTotal += Number(pts) || 0;
     });
 
-    await dataService.updateSubmissionStatus(
+    await homeworkService.updateStudentSubmissionStatus(
       homework.id,
       evaluatingStudent.studentId,
       'completed',

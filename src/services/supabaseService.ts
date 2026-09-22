@@ -82,6 +82,45 @@ CREATE TABLE IF NOT EXISTS public.attendance_records (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 7. ÖDEVLER TABLOSU (assignments)
+CREATE TABLE IF NOT EXISTS public.assignments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    description TEXT,
+    class_id UUID,
+    target_class TEXT,
+    target_classes TEXT[],
+    target_type TEXT DEFAULT 'class',
+    target_student_ids UUID[],
+    teacher_id UUID,
+    due_date TIMESTAMPTZ,
+    due_time TEXT DEFAULT '23:59',
+    max_score NUMERIC DEFAULT 100,
+    xp_reward NUMERIC DEFAULT 50,
+    attachments JSONB DEFAULT '[]'::jsonb,
+    rubric JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 8. ÖDEV TESLİMLERİ VE DURUM TABLOSU (assignment_submissions)
+CREATE TABLE IF NOT EXISTS public.assignment_submissions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    assignment_id UUID NOT NULL REFERENCES public.assignments(id) ON DELETE CASCADE,
+    student_id UUID NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'not_completed', 'excused')),
+    score NUMERIC,
+    feedback TEXT,
+    submitted_at TIMESTAMPTZ,
+    student_note TEXT,
+    attachments JSONB DEFAULT '[]'::jsonb,
+    rubric_scores JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(assignment_id, student_id)
+);
+
 -- ==============================================================================
 -- ROW LEVEL SECURITY (RLS) AKTİFLEŞTİRME
 -- ==============================================================================
@@ -91,6 +130,8 @@ ALTER TABLE public.students ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.parent_student_relations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.grades ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.attendance_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.assignment_submissions ENABLE ROW LEVEL SECURITY;
 
 -- ------------------------------------------------------------------------------
 -- A. VELİLER (parents) RLS POLİTİKALARI
@@ -202,10 +243,85 @@ CREATE POLICY "Allow school backup operations" ON public.school_backups
     USING (true)
     WITH CHECK (true);
 
+-- ------------------------------------------------------------------------------
+-- G. ÖDEVLER (assignments) VE TESLİMLER (assignment_submissions) RLS POLİTİKALARI
+-- ------------------------------------------------------------------------------
+DROP POLICY IF EXISTS "Assignments viewable by authenticated users" ON public.assignments;
+CREATE POLICY "Assignments viewable by authenticated users"
+    ON public.assignments FOR SELECT
+    TO authenticated
+    USING (true);
+
+DROP POLICY IF EXISTS "Staff manage assignments" ON public.assignments;
+CREATE POLICY "Staff manage assignments"
+    ON public.assignments FOR ALL
+    TO authenticated
+    USING (
+        teacher_id = auth.uid() OR
+        EXISTS (
+            SELECT 1 FROM public.profiles 
+            WHERE (id = auth.uid() OR email = auth.email()) 
+            AND role IN ('teacher', 'admin')
+        )
+    )
+    WITH CHECK (
+        teacher_id = auth.uid() OR
+        EXISTS (
+            SELECT 1 FROM public.profiles 
+            WHERE (id = auth.uid() OR email = auth.email()) 
+            AND role IN ('teacher', 'admin')
+        )
+    );
+
+DROP POLICY IF EXISTS "Submissions viewable by student, parent and teacher" ON public.assignment_submissions;
+CREATE POLICY "Submissions viewable by student, parent and teacher"
+    ON public.assignment_submissions FOR SELECT
+    TO authenticated
+    USING (
+        student_id = auth.uid() OR
+        student_id IN (
+            SELECT psr.student_id FROM public.parent_student_relations psr
+            JOIN public.parents p ON p.id = psr.parent_id
+            WHERE p.user_id = auth.uid() OR p.id = auth.uid()
+        ) OR
+        EXISTS (
+            SELECT 1 FROM public.assignments a
+            WHERE a.id = assignment_id AND (
+                a.teacher_id = auth.uid() OR 
+                EXISTS (SELECT 1 FROM public.profiles WHERE (id = auth.uid() OR email = auth.email()) AND role IN ('teacher', 'admin'))
+            )
+        )
+    );
+
+DROP POLICY IF EXISTS "Students can submit assignments" ON public.assignment_submissions;
+CREATE POLICY "Students can submit assignments"
+    ON public.assignment_submissions FOR INSERT
+    TO authenticated
+    WITH CHECK (student_id = auth.uid());
+
+DROP POLICY IF EXISTS "Users can update their submissions" ON public.assignment_submissions;
+CREATE POLICY "Users can update their submissions"
+    ON public.assignment_submissions FOR UPDATE
+    TO authenticated
+    USING (
+        student_id = auth.uid() OR
+        EXISTS (
+            SELECT 1 FROM public.assignments a
+            WHERE a.id = assignment_id AND (
+                a.teacher_id = auth.uid() OR 
+                EXISTS (SELECT 1 FROM public.profiles WHERE (id = auth.uid() OR email = auth.email()) AND role IN ('teacher', 'admin'))
+            )
+        )
+    );
+
 -- İndeksler
 CREATE INDEX IF NOT EXISTS idx_parent_student_rel ON public.parent_student_relations(parent_id, student_id);
 CREATE INDEX IF NOT EXISTS idx_grades_student_id ON public.grades(student_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_student_id ON public.attendance_records(student_id);
+CREATE INDEX IF NOT EXISTS idx_assignments_teacher_id ON public.assignments(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_assignments_class_id ON public.assignments(class_id);
+CREATE INDEX IF NOT EXISTS idx_assignment_submissions_student ON public.assignment_submissions(student_id);
+CREATE INDEX IF NOT EXISTS idx_assignment_submissions_hw ON public.assignment_submissions(assignment_id);
 CREATE INDEX IF NOT EXISTS idx_school_backups_created ON public.school_backups(created_at DESC);
 `;
 

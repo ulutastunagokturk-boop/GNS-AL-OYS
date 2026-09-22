@@ -56,6 +56,7 @@ import {
 import { generateDefaultSchedule } from './scheduleData';
 import { generateUniqueStudentPassword } from '../utils/passwordGenerator';
 import { supabaseBackupService } from './supabaseService';
+import { fixTurkishMojibake, normalizeTurkishClassName } from '../utils/excelTurkishUtils';
 
 export enum OperationType {
   CREATE = 'create',
@@ -195,6 +196,22 @@ class DataService {
           localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(parsed));
         } catch {}
 
+        if (!parsed.announcements || parsed.announcements.length === 0) {
+          parsed.announcements = [...INITIAL_ANNOUNCEMENTS];
+        }
+        if (!parsed.homeworks || parsed.homeworks.length === 0) {
+          parsed.homeworks = [...INITIAL_HOMEWORKS];
+        }
+        if (!parsed.classes || parsed.classes.length === 0) {
+          parsed.classes = [...INITIAL_CLASSES];
+        }
+        if (!parsed.submissions) {
+          parsed.submissions = [];
+        }
+        if (INITIAL_TEACHERS.length > 0 && !parsed.users.some(u => u.uid === INITIAL_TEACHERS[0].uid || u.email?.toLowerCase() === INITIAL_TEACHERS[0].email.toLowerCase())) {
+          parsed.users.push(INITIAL_TEACHERS[0]);
+        }
+
         if (!parsed.schedules) {
           parsed.schedules = [];
         }
@@ -207,8 +224,8 @@ class DataService {
       console.warn('Could not read from localStorage', e);
     }
 
-    // Pure Clean Initial State with ONLY INITIAL_ADMIN
-    const allUsers = [INITIAL_ADMIN];
+    // Pure Clean Initial State with INITIAL_ADMIN and INITIAL_TEACHERS
+    const allUsers = [INITIAL_ADMIN, ...INITIAL_TEACHERS];
     
     const initialRoleAssignments: RoleAssignment[] = [
       {
@@ -355,20 +372,32 @@ class DataService {
 
     // Ödevler (Homeworks): Sunucudaki tam listeyi doğrudan uygula
     if (Array.isArray(state.homeworks)) {
-      this.cache.homeworks = state.homeworks;
-      changed = true;
+      if (state.homeworks.length > 0) {
+        this.cache.homeworks = state.homeworks;
+        changed = true;
+      } else if (!this.cache.homeworks || this.cache.homeworks.length === 0) {
+        this.cache.homeworks = [...INITIAL_HOMEWORKS];
+        changed = true;
+      }
     }
 
     // Ödev Teslimleri (Submissions):
     if (Array.isArray(state.submissions)) {
-      this.cache.submissions = state.submissions;
-      changed = true;
+      if (state.submissions.length > 0 || !this.cache.submissions) {
+        this.cache.submissions = state.submissions;
+        changed = true;
+      }
     }
 
     // Duyurular (Announcements):
     if (Array.isArray(state.announcements)) {
-      this.cache.announcements = state.announcements;
-      changed = true;
+      if (state.announcements.length > 0) {
+        this.cache.announcements = state.announcements;
+        changed = true;
+      } else if (!this.cache.announcements || this.cache.announcements.length === 0) {
+        this.cache.announcements = [...INITIAL_ANNOUNCEMENTS];
+        changed = true;
+      }
     }
 
     // Notlar (Grades):
@@ -458,11 +487,12 @@ class DataService {
       // 3. Setup real-time multi-device SSE listener
       this.setupRealtimeSync();
 
-      // 4. Setup Firestore listeners & sync as backup
+      // 4. Setup Firestore listeners & sync
       this.setupFirestoreListeners();
       await this.syncUsersFromFirestore();
       await this.seedInitialAdminIfMissing();
-      await this.seedInitialClassesAndSchedulesIfMissing();
+      await this.seedAllInitialDataIfMissingInFirestore();
+      await this.syncHomeworksFromCloud();
 
       // 5. Ensure live relational database has current classes and users
       await this.seedSupabaseIfEmpty();
@@ -493,6 +523,87 @@ class DataService {
     return false;
   }
 
+  /**
+   * Hem Supabase hem Firestore üzerinden tüm ödevleri ve teslimatları buluttan çeker, yerel önbellek ile harmanlar.
+   */
+  public async syncHomeworksFromCloud(): Promise<Homework[]> {
+    let remoteHomeworks: Homework[] = [];
+
+    // 1. Fetch from Supabase API (/api/homeworks)
+    try {
+      const res = await fetch('/api/homeworks');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.homeworks) && json.homeworks.length > 0) {
+          remoteHomeworks = json.homeworks;
+        }
+      }
+    } catch (e) {
+      console.warn('[DataService] /api/homeworks sync note:', e);
+    }
+
+    // 2. Fetch from Cloud Firestore (/homeworks)
+    try {
+      const hwSnap = await getDocs(collection(db, 'homeworks'));
+      if (!hwSnap.empty) {
+        const firestoreList: Homework[] = [];
+        hwSnap.forEach(d => {
+          firestoreList.push({ id: d.id, ...d.data() } as Homework);
+        });
+        const map = new Map<string, Homework>();
+        remoteHomeworks.forEach(h => map.set(h.id, h));
+        firestoreList.forEach(h => map.set(h.id, h));
+        remoteHomeworks = Array.from(map.values());
+      }
+    } catch (e) {
+      console.warn('[DataService] Firestore homeworks sync note:', e);
+    }
+
+    // 3. Merge into local cache
+    if (remoteHomeworks.length > 0) {
+      const map = new Map<string, Homework>();
+      (this.cache.homeworks || []).forEach(h => map.set(h.id, h));
+      remoteHomeworks.forEach(h => map.set(h.id, h));
+      this.cache.homeworks = Array.from(map.values()).sort(
+        (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+      );
+      this.saveCache(this.cache, false);
+      this.notifySubscribers();
+    }
+
+    // 4. Fetch submissions from Firestore
+    try {
+      const subSnap = await getDocs(collection(db, 'homework_submissions'));
+      if (!subSnap.empty) {
+        const list: HomeworkSubmission[] = [];
+        subSnap.forEach(d => list.push({ id: d.id, ...d.data() } as HomeworkSubmission));
+        const subMap = new Map<string, HomeworkSubmission>();
+        (this.cache.submissions || []).forEach(s => subMap.set(s.id, s));
+        list.forEach(s => subMap.set(s.id, s));
+        this.cache.submissions = Array.from(subMap.values());
+        this.saveCache(this.cache, false);
+        this.notifySubscribers();
+      }
+    } catch {}
+
+    return this.cache.homeworks;
+  }
+
+  /**
+   * Buluttan gelen ödev listesini yerel önbellekle birleştirir.
+   */
+  public mergeHomeworksFromCloud(cloudHomeworks: Homework[]): void {
+    if (!Array.isArray(cloudHomeworks) || cloudHomeworks.length === 0) return;
+    const map = new Map<string, Homework>();
+    (this.cache.homeworks || []).forEach(h => map.set(h.id, h));
+    cloudHomeworks.forEach(h => map.set(h.id, h));
+    this.cache.homeworks = Array.from(map.values()).sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+    this.saveCache(this.cache, false);
+    this.notifySubscribers();
+  }
+
   private ensureStarterDataIfEmpty() {
     let changed = false;
 
@@ -501,7 +612,7 @@ class DataService {
       this.cache.classes = [...INITIAL_CLASSES];
       changed = true;
     } else {
-      const has9D = this.cache.classes.some(c => normalizeClassName(c.name) === '9-D');
+      const has9D = this.cache.classes.some(c => normalizeClassName(c.name) === '9D');
       if (!has9D) {
         this.cache.classes.unshift({
           id: 'class-9-d',
@@ -593,63 +704,276 @@ class DataService {
   }
 
   /**
-   * Ensures initial classes exist in Firestore.
+   * Ensures initial classes, announcements, and homeworks exist in Firestore.
    */
-  private async seedInitialClassesAndSchedulesIfMissing() {
+  private async seedAllInitialDataIfMissingInFirestore() {
     try {
-      const classesSnap = await getDocs(collection(db, 'classes'));
-      if (classesSnap.empty) {
-        for (const c of INITIAL_CLASSES) {
-          await setDoc(doc(db, 'classes', c.id), sanitizeForFirestore(c));
+      // 1. Ensure all initial classes exist
+      for (const c of INITIAL_CLASSES) {
+        try {
+          const docRef = doc(db, 'classes', c.id);
+          const snap = await getDoc(docRef);
+          if (!snap.exists()) {
+            await setDoc(docRef, sanitizeForFirestore(c));
+          }
+        } catch {}
+      }
+
+      // 2. Ensure initial announcements exist
+      const annSnap = await getDocs(collection(db, 'announcements'));
+      if (annSnap.empty) {
+        for (const a of INITIAL_ANNOUNCEMENTS) {
+          try {
+            await setDoc(doc(db, 'announcements', a.id), sanitizeForFirestore(a));
+          } catch {}
+        }
+      }
+
+      // 3. Ensure initial homeworks exist
+      const hwSnap = await getDocs(collection(db, 'homeworks'));
+      if (hwSnap.empty) {
+        for (const h of INITIAL_HOMEWORKS) {
+          try {
+            await setDoc(doc(db, 'homeworks', h.id), sanitizeForFirestore(h));
+          } catch {}
         }
       }
     } catch (e) {
-      console.log('[Firestore] seedInitialClasses note:', e);
+      console.log('[Firestore] seedAllInitialData note:', e);
+    }
+  }
+
+  /**
+   * Tests Firestore connectivity and measures roundtrip latency.
+   */
+  public async testFirestoreConnection(): Promise<{ success: boolean; message: string; latencyMs: number }> {
+    const start = Date.now();
+    try {
+      const pingId = `ping-${Date.now()}`;
+      const pingRef = doc(db, '_health', pingId);
+      await setDoc(pingRef, { ping: true, timestamp: new Date().toISOString() });
+      const snap = await getDoc(pingRef);
+      await deleteDoc(pingRef);
+      const latencyMs = Date.now() - start;
+      if (snap.exists()) {
+        return {
+          success: true,
+          message: `Google Cloud Firestore bağlantısı aktif ve çalışıyor (${latencyMs}ms)`,
+          latencyMs
+        };
+      }
+      return {
+        success: false,
+        message: 'Bağlantı testi doğrulanamadı',
+        latencyMs
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: `Firestore bağlantı hatası: ${err?.message || String(err)}`,
+        latencyMs: Date.now() - start
+      };
+    }
+  }
+
+  /**
+   * Returns live counts of documents currently stored in Google Cloud Firestore.
+   */
+  public async getFirestoreStats(): Promise<{
+    users: number;
+    classes: number;
+    announcements: number;
+    homeworks: number;
+    grades: number;
+    attendance: number;
+    schedules: number;
+  }> {
+    try {
+      const [uSnap, cSnap, aSnap, hSnap, gSnap, attSnap, sSnap] = await Promise.all([
+        getDocs(collection(db, 'users')),
+        getDocs(collection(db, 'classes')),
+        getDocs(collection(db, 'announcements')),
+        getDocs(collection(db, 'homeworks')),
+        getDocs(collection(db, 'grades')),
+        getDocs(collection(db, 'attendance')),
+        getDocs(collection(db, 'schedules'))
+      ]);
+      return {
+        users: uSnap.size,
+        classes: cSnap.size,
+        announcements: aSnap.size,
+        homeworks: hSnap.size,
+        grades: gSnap.size,
+        attendance: attSnap.size,
+        schedules: sSnap.size
+      };
+    } catch (e) {
+      console.warn('Could not fetch Firestore stats:', e);
+      return {
+        users: this.cache.users.length,
+        classes: this.cache.classes.length,
+        announcements: this.cache.announcements.length,
+        homeworks: this.cache.homeworks.length,
+        grades: this.cache.grades.length,
+        attendance: this.cache.attendance.length,
+        schedules: this.cache.schedules.length
+      };
     }
   }
 
   /**
    * Complete multi-device cloud synchronization utility.
+   * Uploads all users, classes, announcements, homeworks, submissions, grades, attendance, and schedules to Google Cloud Firestore.
    */
   public async forceSyncAllWithFirestore(): Promise<{
     success: boolean;
     syncedUsersCount: number;
     syncedClassesCount: number;
+    syncedAnnouncementsCount: number;
+    syncedHomeworksCount: number;
+    syncedGradesCount: number;
+    syncedAttendanceCount: number;
     syncedSchedulesCount: number;
     message: string;
     error?: string;
   }> {
     try {
-      // 1. Push any local users missing in Firestore
+      // 1. Users
       for (const u of this.cache.users) {
         try {
-          const uDocRef = doc(db, 'users', u.uid);
-          const snap = await getDoc(uDocRef);
-          if (!snap.exists()) {
-            await setDoc(uDocRef, sanitizeForFirestore(u));
-          }
+          await setDoc(doc(db, 'users', u.uid), sanitizeForFirestore(u), { merge: true });
         } catch {}
       }
 
-      // 2. Fetch all users from Firestore and merge
-      await this.syncUsersFromFirestore();
+      // 2. Classes (Ensure all initial + cache classes are pushed)
+      for (const c of this.cache.classes) {
+        try {
+          await setDoc(doc(db, 'classes', c.id), sanitizeForFirestore(c), { merge: true });
+        } catch {}
+      }
 
-      // 3. Seed classes & schedules if missing in Firestore
-      await this.seedInitialClassesAndSchedulesIfMissing();
+      // 3. Announcements
+      for (const a of this.cache.announcements) {
+        try {
+          await setDoc(doc(db, 'announcements', a.id), sanitizeForFirestore(a), { merge: true });
+        } catch {}
+      }
 
-      // 4. Also push any local role assignments missing
+      // 4. Homeworks
+      for (const h of this.cache.homeworks) {
+        try {
+          await setDoc(doc(db, 'homeworks', h.id), sanitizeForFirestore(h), { merge: true });
+        } catch {}
+      }
+
+      // 5. Submissions
+      for (const s of (this.cache.submissions || [])) {
+        try {
+          await setDoc(doc(db, 'homework_submissions', s.id), sanitizeForFirestore(s), { merge: true });
+        } catch {}
+      }
+
+      // 6. Grades
+      for (const g of (this.cache.grades || [])) {
+        try {
+          await setDoc(doc(db, 'grades', g.id), sanitizeForFirestore(g), { merge: true });
+        } catch {}
+      }
+
+      // 7. Attendance
+      for (const att of (this.cache.attendance || [])) {
+        try {
+          await setDoc(doc(db, 'attendance', att.id), sanitizeForFirestore(att), { merge: true });
+        } catch {}
+      }
+
+      // 8. Schedules
+      for (const sc of (this.cache.schedules || [])) {
+        try {
+          await setDoc(doc(db, 'schedules', sc.id), sanitizeForFirestore(sc), { merge: true });
+        } catch {}
+      }
+
+      // 9. Role assignments
       for (const ra of (this.cache.roleAssignments || [])) {
         try {
-          const raRef = doc(db, 'role_assignments', ra.id);
-          const rSnap = await getDoc(raRef);
-          if (!rSnap.exists()) {
-            await setDoc(raRef, sanitizeForFirestore(ra));
-          }
+          await setDoc(doc(db, 'role_assignments', ra.id), sanitizeForFirestore(ra), { merge: true });
         } catch {}
       }
 
-      // 5. Query latest classes
-      const cSnap = await getDocs(collection(db, 'classes'));
+      // 10. Badges
+      for (const b of (this.cache.badges || [])) {
+        try {
+          await setDoc(doc(db, 'badges', b.id), sanitizeForFirestore(b), { merge: true });
+        } catch {}
+      }
+
+      // Seed any missing defaults
+      await this.seedAllInitialDataIfMissingInFirestore();
+
+      this.saveCache(this.cache, false);
+      this.notifySubscribers();
+
+      return {
+        success: true,
+        syncedUsersCount: this.cache.users.length,
+        syncedClassesCount: this.cache.classes.length,
+        syncedAnnouncementsCount: this.cache.announcements.length,
+        syncedHomeworksCount: this.cache.homeworks.length,
+        syncedGradesCount: this.cache.grades.length,
+        syncedAttendanceCount: this.cache.attendance.length,
+        syncedSchedulesCount: this.cache.schedules.length,
+        message: `Google Cloud Firestore bulutuna tüm veriler başarıyla aktarıldı: ${this.cache.users.length} kullanıcı, ${this.cache.classes.length} sınıf, ${this.cache.announcements.length} duyuru, ${this.cache.homeworks.length} ödev.`
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        syncedUsersCount: this.cache.users.length,
+        syncedClassesCount: this.cache.classes.length,
+        syncedAnnouncementsCount: this.cache.announcements.length,
+        syncedHomeworksCount: this.cache.homeworks.length,
+        syncedGradesCount: this.cache.grades.length,
+        syncedAttendanceCount: this.cache.attendance.length,
+        syncedSchedulesCount: this.cache.schedules.length,
+        message: 'Bulut eşitleme hatası: ' + (e.message || String(e)),
+        error: e.message || String(e)
+      };
+    }
+  }
+
+  /**
+   * Fetches all records from Google Cloud Firestore and updates local state.
+   */
+  public async pullAllFromFirestore(): Promise<{
+    success: boolean;
+    syncedUsersCount: number;
+    syncedClassesCount: number;
+    syncedAnnouncementsCount: number;
+    syncedHomeworksCount: number;
+    message: string;
+  }> {
+    try {
+      const [uSnap, cSnap, aSnap, hSnap, subSnap, gSnap, attSnap, sSnap, raSnap] = await Promise.all([
+        getDocs(collection(db, 'users')),
+        getDocs(collection(db, 'classes')),
+        getDocs(collection(db, 'announcements')),
+        getDocs(collection(db, 'homeworks')),
+        getDocs(collection(db, 'homework_submissions')),
+        getDocs(collection(db, 'grades')),
+        getDocs(collection(db, 'attendance')),
+        getDocs(collection(db, 'schedules')),
+        getDocs(collection(db, 'role_assignments'))
+      ]);
+
+      if (!uSnap.empty) {
+        const remoteUsers: UserProfile[] = [];
+        uSnap.forEach(d => remoteUsers.push({ ...(d.data() as UserProfile), uid: d.id }));
+        const map = new Map<string, UserProfile>();
+        this.cache.users.forEach(u => map.set(u.uid, u));
+        remoteUsers.forEach(u => map.set(u.uid, u));
+        this.cache.users = Array.from(map.values());
+      }
+
       if (!cSnap.empty) {
         const clsList: SchoolClass[] = [];
         cSnap.forEach(d => {
@@ -663,35 +987,74 @@ class DataService {
             capacity: raw.capacity || 30
           });
         });
-        this.cache.classes = clsList;
+        const map = new Map<string, SchoolClass>();
+        INITIAL_CLASSES.forEach(c => map.set(c.id, c));
+        this.cache.classes.forEach(c => map.set(c.id, c));
+        clsList.forEach(c => map.set(c.id, c));
+        this.cache.classes = Array.from(map.values());
       }
 
-      // 6. Query latest schedules
-      const sSnap = await getDocs(collection(db, 'schedules'));
+      if (!aSnap.empty) {
+        const list: Announcement[] = [];
+        aSnap.forEach(d => list.push({ id: d.id, ...(d.data() as Announcement) }));
+        this.cache.announcements = list;
+      }
+
+      if (!hSnap.empty) {
+        const list: Homework[] = [];
+        hSnap.forEach(d => list.push({ id: d.id, ...(d.data() as Homework) }));
+        this.cache.homeworks = list;
+      }
+
+      if (!subSnap.empty) {
+        const list: HomeworkSubmission[] = [];
+        subSnap.forEach(d => list.push({ id: d.id, ...(d.data() as HomeworkSubmission) }));
+        this.cache.submissions = list;
+      }
+
+      if (!gSnap.empty) {
+        const list: GradeRecord[] = [];
+        gSnap.forEach(d => list.push({ id: d.id, ...(d.data() as GradeRecord) }));
+        this.cache.grades = list;
+      }
+
+      if (!attSnap.empty) {
+        const list: AttendanceRecord[] = [];
+        attSnap.forEach(d => list.push({ id: d.id, ...(d.data() as AttendanceRecord) }));
+        this.cache.attendance = list;
+      }
+
       if (!sSnap.empty) {
-        const schedList: WeeklyScheduleSlot[] = [];
-        sSnap.forEach(d => schedList.push({ id: d.id, ...(d.data() as WeeklyScheduleSlot) }));
-        this.cache.schedules = schedList;
+        const list: WeeklyScheduleSlot[] = [];
+        sSnap.forEach(d => list.push({ id: d.id, ...(d.data() as WeeklyScheduleSlot) }));
+        this.cache.schedules = list;
       }
 
-      this.saveCache(this.cache);
+      if (!raSnap.empty) {
+        const list: RoleAssignment[] = [];
+        raSnap.forEach(d => list.push({ id: d.id, ...(d.data() as RoleAssignment) }));
+        this.cache.roleAssignments = list;
+      }
+
+      this.saveCache(this.cache, false);
       this.notifySubscribers();
 
       return {
         success: true,
         syncedUsersCount: this.cache.users.length,
         syncedClassesCount: this.cache.classes.length,
-        syncedSchedulesCount: this.cache.schedules.length,
-        message: `Bulut veritabanı ile tam eşitleme tamamlandı! ${this.cache.users.length} kullanıcı, ${this.cache.classes.length} sınıf ve ${this.cache.schedules.length} program hazır.`
+        syncedAnnouncementsCount: this.cache.announcements.length,
+        syncedHomeworksCount: this.cache.homeworks.length,
+        message: 'Google Cloud Firestore’dan tüm veriler güncel olarak çekildi ve arayüze yüklendi!'
       };
-    } catch (e: any) {
+    } catch (err: any) {
       return {
         success: false,
-        syncedUsersCount: this.cache.users.length,
-        syncedClassesCount: this.cache.classes.length,
-        syncedSchedulesCount: this.cache.schedules.length,
-        message: 'Eşitleme hatası: ' + (e.message || String(e)),
-        error: e.message || String(e)
+        syncedUsersCount: 0,
+        syncedClassesCount: 0,
+        syncedAnnouncementsCount: 0,
+        syncedHomeworksCount: 0,
+        message: 'Veri çekme hatası: ' + (err?.message || String(err))
       };
     }
   }
@@ -728,31 +1091,6 @@ class DataService {
       this.saveCache(this.cache);
     } catch (err) {
       console.log('[Firestore] seedInitialAdmin note:', err);
-    }
-  }
-
-  /**
-   * Diagnostic test to check live Firestore latency and document health.
-   */
-  public async testFirestoreConnection(): Promise<{ success: boolean; latencyMs: number; userCount: number; message: string; error?: string }> {
-    const start = performance.now();
-    try {
-      const snap = await getDocs(collection(db, 'users'));
-      const latency = Math.round(performance.now() - start);
-      return {
-        success: true,
-        latencyMs: latency,
-        userCount: snap.size,
-        message: `Firestore veritabanı aktif ve bağlı. (${snap.size} kullanıcı kaydı doğrulandı)`
-      };
-    } catch (e: any) {
-      return {
-        success: false,
-        latencyMs: Math.round(performance.now() - start),
-        userCount: 0,
-        message: 'Firestore bağlantı hatası: ' + (e.message || String(e)),
-        error: e.message || String(e)
-      };
     }
   }
 
@@ -796,6 +1134,7 @@ class DataService {
     email?: string;
     phone?: string;
     identifier?: string;
+    allowedRoles?: UserRole[];
   }): Promise<UserProfile | null> {
     try {
       const usersRef = collection(db, 'users');
@@ -810,30 +1149,50 @@ class DataService {
           remoteUsers.push(u);
 
           if (!found) {
+            // Strict role guard: Never match accounts outside allowedRoles
+            if (criteria.allowedRoles && criteria.allowedRoles.length > 0 && !criteria.allowedRoles.includes(u.role)) {
+              return;
+            }
+
             const targetSchool = criteria.schoolNumber?.trim();
             const targetEmail = criteria.email?.trim().toLowerCase();
             const targetPhone = criteria.phone?.replace(/\D/g, '');
 
-            if (targetSchool && (u.schoolNumber === targetSchool || (u.role === 'student' && u.email?.includes(targetSchool)))) {
+            if (targetSchool && u.role === 'student' && u.schoolNumber === targetSchool) {
               found = u;
             } else if (targetEmail && u.email?.toLowerCase() === targetEmail) {
               found = u;
             } else if (targetPhone && u.phone) {
               const uClean = u.phone.replace(/\D/g, '');
-              if (uClean === targetPhone || uClean.endsWith(targetPhone) || targetPhone.endsWith(uClean)) {
+              if (
+                uClean === targetPhone ||
+                (targetPhone.length === 10 && uClean === '0' + targetPhone) ||
+                (targetPhone.length === 11 && targetPhone.startsWith('0') && uClean === targetPhone.slice(1))
+              ) {
                 found = u;
               }
             } else if (criteria.identifier) {
               const raw = criteria.identifier.trim().toLowerCase();
               const dig = raw.replace(/\D/g, '');
               const uCleanPhone = u.phone ? u.phone.replace(/\D/g, '') : '';
-              if (
-                u.email?.toLowerCase() === raw ||
-                u.schoolNumber === raw ||
-                (dig.length >= 7 && (uCleanPhone === dig || uCleanPhone.endsWith(dig) || dig.endsWith(uCleanPhone))) ||
-                (dig && u.schoolNumber === dig) ||
-                u.displayName?.toLowerCase() === raw
+
+              if (u.email?.toLowerCase() === raw) {
+                found = u;
+              } else if (
+                dig.length >= 10 &&
+                (uCleanPhone === dig ||
+                  (dig.length === 10 && uCleanPhone === '0' + dig) ||
+                  (dig.length === 11 && dig.startsWith('0') && uCleanPhone === dig.slice(1)))
               ) {
+                found = u;
+              } else if (
+                dig &&
+                (!criteria.allowedRoles || criteria.allowedRoles.includes('student')) &&
+                u.role === 'student' &&
+                u.schoolNumber === dig
+              ) {
+                found = u;
+              } else if (u.displayName?.toLowerCase() === raw) {
                 found = u;
               }
             }
@@ -890,7 +1249,8 @@ class DataService {
           const list: RoleAssignment[] = [];
           snapshot.forEach(docSnap => list.push({ id: docSnap.id, ...docSnap.data() } as RoleAssignment));
           this.cache.roleAssignments = list;
-          this.saveCache(this.cache);
+          this.saveCache(this.cache, false);
+          this.notifySubscribers();
         }
       }, (err) => {
         handleFirestoreError(err, OperationType.LIST, 'role_assignments');
@@ -898,28 +1258,49 @@ class DataService {
       this.listeners.set('role_assignments', unsubRoleAssign);
 
       // Listen to announcements
-      const annQuery = query(collection(db, 'announcements'), orderBy('createdAt', 'desc'));
-      const unsubAnn = onSnapshot(annQuery, (snapshot) => {
+      const unsubAnn = onSnapshot(collection(db, 'announcements'), (snapshot) => {
         if (!snapshot.empty) {
           const list: Announcement[] = [];
           snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as Announcement));
-          this.cache.announcements = list;
-          this.saveCache(this.cache);
+          const map = new Map<string, Announcement>();
+          this.cache.announcements.forEach(a => map.set(a.id, a));
+          list.forEach(a => map.set(a.id, a));
+          this.cache.announcements = Array.from(map.values()).sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+          this.saveCache(this.cache, false);
+          this.notifySubscribers();
         }
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'announcements'));
       this.listeners.set('announcements', unsubAnn);
 
       // Listen to homeworks
-      const hwQuery = query(collection(db, 'homeworks'), orderBy('createdAt', 'desc'));
-      const unsubHw = onSnapshot(hwQuery, (snapshot) => {
+      const unsubHw = onSnapshot(collection(db, 'homeworks'), (snapshot) => {
         if (!snapshot.empty) {
           const list: Homework[] = [];
           snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as Homework));
-          this.cache.homeworks = list;
-          this.saveCache(this.cache);
+          const map = new Map<string, Homework>();
+          this.cache.homeworks.forEach(h => map.set(h.id, h));
+          list.forEach(h => map.set(h.id, h));
+          this.cache.homeworks = Array.from(map.values()).sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+          this.saveCache(this.cache, false);
+          this.notifySubscribers();
         }
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'homeworks'));
       this.listeners.set('homeworks', unsubHw);
+
+      // Listen to homework submissions
+      const unsubSubmissions = onSnapshot(collection(db, 'homework_submissions'), (snapshot) => {
+        if (!snapshot.empty) {
+          const list: HomeworkSubmission[] = [];
+          snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as HomeworkSubmission));
+          const map = new Map<string, HomeworkSubmission>();
+          this.cache.submissions.forEach(s => map.set(s.id, s));
+          list.forEach(s => map.set(s.id, s));
+          this.cache.submissions = Array.from(map.values());
+          this.saveCache(this.cache, false);
+          this.notifySubscribers();
+        }
+      }, (err) => handleFirestoreError(err, OperationType.LIST, 'homework_submissions'));
+      this.listeners.set('homework_submissions', unsubSubmissions);
 
       // Listen to classes
       const classesQuery = query(collection(db, 'classes'), orderBy('name', 'asc'));
@@ -937,8 +1318,13 @@ class DataService {
               capacity: raw.capacity || 30
             });
           });
-          this.cache.classes = list;
-          this.saveCache(this.cache);
+          const map = new Map<string, SchoolClass>();
+          INITIAL_CLASSES.forEach(c => map.set(c.id, c));
+          this.cache.classes.forEach(c => map.set(c.id, c));
+          list.forEach(c => map.set(c.id, c));
+          this.cache.classes = Array.from(map.values());
+          this.saveCache(this.cache, false);
+          this.notifySubscribers();
         }
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'classes'));
       this.listeners.set('classes', unsubClasses);
@@ -950,7 +1336,8 @@ class DataService {
           const list: WeeklyScheduleSlot[] = [];
           snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as WeeklyScheduleSlot));
           this.cache.schedules = list;
-          this.saveCache(this.cache);
+          this.saveCache(this.cache, false);
+          this.notifySubscribers();
         }
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'schedules'));
       this.listeners.set('schedules', unsubSched);
@@ -962,7 +1349,8 @@ class DataService {
           const list: GradeRecord[] = [];
           snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as GradeRecord));
           this.cache.grades = list;
-          this.saveCache(this.cache);
+          this.saveCache(this.cache, false);
+          this.notifySubscribers();
         }
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'grades'));
       this.listeners.set('grades', unsubGrades);
@@ -974,7 +1362,8 @@ class DataService {
           const list: AttendanceRecord[] = [];
           snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as AttendanceRecord));
           this.cache.attendance = list;
-          this.saveCache(this.cache);
+          this.saveCache(this.cache, false);
+          this.notifySubscribers();
         }
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'attendance'));
       this.listeners.set('attendance', unsubAtt);
@@ -1027,28 +1416,45 @@ class DataService {
     });
   }
 
-  public getUserByPhoneOrEmail(identifier: string): UserProfile | undefined {
+  public getUserByPhoneOrEmail(identifier: string, allowedRoles?: UserRole[]): UserProfile | undefined {
     const trimmed = identifier.trim();
+    if (!trimmed) return undefined;
     const cleanDigits = trimmed.replace(/\D/g, '');
-    
-    // If it looks like a phone number (mostly digits or starts with 0/+/5)
-    if (cleanDigits.length >= 7) {
-      const byPhone = this.getUserByPhone(cleanDigits);
+    const lower = trimmed.toLowerCase();
+
+    const candidateUsers = allowedRoles && allowedRoles.length > 0
+      ? this.cache.users.filter(u => allowedRoles.includes(u.role))
+      : this.cache.users;
+
+    // 1. Direct email match
+    if (lower.includes('@')) {
+      const byEmail = candidateUsers.find(u => u.email?.toLowerCase() === lower);
+      if (byEmail) return byEmail;
+    }
+
+    // 2. Exact phone match (standard 10 or 11 digits)
+    if (cleanDigits.length >= 10) {
+      const byPhone = candidateUsers.find(u => {
+        if (!u.phone) return false;
+        const uPhoneDigits = u.phone.replace(/\D/g, '');
+        return (
+          uPhoneDigits === cleanDigits ||
+          (cleanDigits.length === 10 && uPhoneDigits === '0' + cleanDigits) ||
+          (cleanDigits.length === 11 && cleanDigits.startsWith('0') && uPhoneDigits === cleanDigits.slice(1))
+        );
+      });
       if (byPhone) return byPhone;
     }
-    
-    // If it matches a school number
-    if (cleanDigits) {
-      const bySchool = this.getUserBySchoolNumber(cleanDigits);
+
+    // 3. School number match (STRICTLY for students only!)
+    if (cleanDigits && (!allowedRoles || allowedRoles.includes('student'))) {
+      const bySchool = candidateUsers.find(u => u.role === 'student' && u.schoolNumber?.trim() === cleanDigits);
       if (bySchool) return bySchool;
     }
 
-    // Otherwise or as fallback, check email, username, or exact school number
-    const lower = trimmed.toLowerCase();
-    return this.cache.users.find(u => 
+    // 4. Exact email or exact displayName match
+    return candidateUsers.find(u => 
       (u.email && u.email.toLowerCase() === lower) || 
-      (u.phone && u.phone.replace(/\D/g, '') === cleanDigits) ||
-      (u.schoolNumber && u.schoolNumber.trim() === trimmed) ||
       (u.displayName && u.displayName.toLowerCase() === lower)
     );
   }
@@ -1177,9 +1583,9 @@ class DataService {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const rowIdx = i + 1;
-      const cleanName = row.name?.trim();
-      const cleanSchoolNo = row.schoolNumber ? String(row.schoolNumber).trim() : '';
-      const cleanClass = row.classGrade ? String(row.classGrade).trim().toUpperCase() : '';
+      const cleanName = fixTurkishMojibake(row.name?.trim() || '');
+      const cleanSchoolNo = row.schoolNumber ? String(row.schoolNumber).replace(/^#/, '').trim() : '';
+      const cleanClass = normalizeTurkishClassName(row.classGrade ? String(row.classGrade).trim() : '');
 
       if (!cleanName || !cleanSchoolNo || !cleanClass) {
         skippedOrErrors++;
@@ -1357,11 +1763,11 @@ class DataService {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const rowIdx = i + 1;
-      const cleanParentName = row.parentName?.trim();
+      const cleanParentName = fixTurkishMojibake(row.parentName?.trim() || '');
       const cleanPhone = row.parentPhone ? String(row.parentPhone).trim().replace(/\s+/g, '') : '';
       const cleanEmail = row.parentEmail ? String(row.parentEmail).trim().toLowerCase() : '';
       const rawStudentNos = row.studentNumbers ? String(row.studentNumbers).trim() : '';
-      const rawStudentName = row.studentName ? String(row.studentName).trim() : '';
+      const rawStudentName = fixTurkishMojibake(row.studentName?.trim() || '');
 
       if (!cleanParentName && !cleanPhone && !cleanEmail) {
         skippedOrErrors++;
@@ -1808,7 +2214,11 @@ class DataService {
     );
 
     const determinedPassword = data.password?.trim() || 
-      (data.assignedRole === 'student' ? (existingUser?.password || generateUniqueStudentPassword({ schoolNumber: data.schoolNumber })) : existingUser?.password);
+      existingUser?.password ||
+      (data.assignedRole === 'student' ? generateUniqueStudentPassword({ schoolNumber: data.schoolNumber }) :
+       data.assignedRole === 'teacher' ? `Gns-${Math.floor(1000 + Math.random() * 9000)}!Tch` :
+       data.assignedRole === 'admin' ? `Gns-${Math.floor(1000 + Math.random() * 9000)}!Adm` :
+       `veli${Math.floor(1000 + Math.random() * 9000)}`);
 
     let targetUser: UserProfile;
     if (existingUser) {
@@ -2143,7 +2553,7 @@ class DataService {
     );
 
     try {
-      await updateDoc(doc(db, 'classes', classId), updates as any);
+      await setDoc(doc(db, 'classes', classId), sanitizeForFirestore(updatedClass), { merge: true });
     } catch (e) {
       console.log('Firebase update class error:', e);
     }
@@ -2177,7 +2587,10 @@ class DataService {
   }
 
   public getHomeworksForStudent(studentClass?: string, studentId?: string): Homework[] {
-    const cleanNorm = normalizeClassName(studentClass);
+    const student = studentId ? this.getUserById(studentId) : undefined;
+    const effectiveClass = studentClass || student?.classGrade || '';
+    const cleanNorm = normalizeClassName(effectiveClass);
+
     return this.cache.homeworks.filter(hw => {
       // 1. If assigned specifically to selected students
       if (hw.targetType === 'student' || (hw.targetStudentIds && hw.targetStudentIds.length > 0)) {
@@ -2186,17 +2599,19 @@ class DataService {
       }
 
       // 2. All School
-      if (hw.targetClass === 'Tüm Okul') return true;
+      if (hw.targetClass === 'Tüm Okul' || normalizeClassName(hw.targetClass) === 'TÜMOKUL') return true;
+      if (hw.targetClasses && hw.targetClasses.some(c => c === 'Tüm Okul' || normalizeClassName(c) === 'TÜMOKUL')) return true;
 
       // 3. If assigned to multiple classes
       if (hw.targetClasses && hw.targetClasses.length > 0) {
         if (!cleanNorm) return false;
-        return hw.targetClasses.some(c => c === 'Tüm Okul' || normalizeClassName(c) === cleanNorm);
+        return hw.targetClasses.some(c => c === 'Tüm Okul' || normalizeClassName(c) === 'TÜMOKUL' || normalizeClassName(c) === cleanNorm);
       }
 
-      // 4. Single Class match
+      // 4. Single Class or Comma-separated match
       if (cleanNorm && hw.targetClass) {
-        if (normalizeClassName(hw.targetClass) === cleanNorm) return true;
+        const parts = hw.targetClass.split(',').map(c => normalizeClassName(c.trim()));
+        if (parts.includes(cleanNorm) || parts.includes('TÜMOKUL')) return true;
       }
 
       return false;
@@ -2302,7 +2717,7 @@ class DataService {
     );
 
     try {
-      await updateDoc(doc(db, 'homeworks', homeworkId), sanitizeForFirestore(updates));
+      await setDoc(doc(db, 'homeworks', homeworkId), sanitizeForFirestore(updatedHw), { merge: true });
     } catch (e) {
       console.log('Firebase update homework sync:', e);
     }
@@ -2322,15 +2737,38 @@ class DataService {
     }
   }
 
+  public getHomeworkById(homeworkId: string): Homework | undefined {
+    return this.cache.homeworks.find(h => h.id === homeworkId);
+  }
+
+  public getSubmissions(): HomeworkSubmission[] {
+    return [...this.cache.submissions];
+  }
+
   public getSubmissionsForHomework(homeworkId: string): HomeworkSubmission[] {
     const homework = this.cache.homeworks.find(h => h.id === homeworkId);
     const existing = this.cache.submissions.filter(s => s.homeworkId === homeworkId);
     
     if (homework) {
-      const targetStudents = homework.targetClass === 'Tüm Okul' 
-        ? this.getStudents() 
-        : this.getStudentsByClass(homework.targetClass);
+      let targetStudents: UserProfile[] = [];
+      if (homework.targetType === 'student' && homework.targetStudentIds && homework.targetStudentIds.length > 0) {
+        targetStudents = this.getStudents().filter(st => homework.targetStudentIds?.includes(st.uid));
+      } else if (homework.targetClasses && homework.targetClasses.length > 0) {
+        targetStudents = this.getStudents().filter(st => 
+          st.classGrade && homework.targetClasses?.some(tc => tc === 'Tüm Okul' || normalizeClassName(tc) === 'TÜMOKUL' || normalizeClassName(tc) === normalizeClassName(st.classGrade))
+        );
+      } else if (homework.targetClass === 'Tüm Okul' || normalizeClassName(homework.targetClass) === 'TÜMOKUL') {
+        targetStudents = this.getStudents();
+      } else if (homework.targetClass) {
+        const parts = homework.targetClass.split(',').map(c => normalizeClassName(c.trim()));
+        targetStudents = this.getStudents().filter(st =>
+          st.classGrade && (parts.includes('TÜMOKUL') || parts.includes(normalizeClassName(st.classGrade)))
+        );
+      } else {
+        targetStudents = this.getStudents();
+      }
 
+      let cacheChanged = false;
       targetStudents.forEach(st => {
         if (!existing.some(s => s.studentId === st.uid)) {
           const freshSub: HomeworkSubmission = {
@@ -2339,20 +2777,52 @@ class DataService {
             studentId: st.uid,
             studentName: st.displayName,
             studentNumber: st.schoolNumber || '',
-            studentClass: st.classGrade || homework.targetClass,
+            studentClass: st.classGrade || homework.targetClass || '',
             status: 'pending',
             updatedAt: new Date().toISOString()
           };
           existing.push(freshSub);
           this.cache.submissions.push(freshSub);
+          cacheChanged = true;
         }
       });
+      if (cacheChanged) {
+        this.saveCache(this.cache, false);
+      }
     }
 
     return existing.sort((a, b) => (Number(a.studentNumber) || 0) - (Number(b.studentNumber) || 0));
   }
 
   public getSubmissionsForStudent(studentId: string): HomeworkSubmission[] {
+    const student = this.getUserById(studentId);
+    if (!student) return this.cache.submissions.filter(s => s.studentId === studentId);
+
+    const applicableHomeworks = this.getHomeworksForStudent(student.classGrade, studentId);
+    let cacheChanged = false;
+
+    applicableHomeworks.forEach(hw => {
+      const exists = this.cache.submissions.some(s => s.homeworkId === hw.id && s.studentId === studentId);
+      if (!exists) {
+        const freshSub: HomeworkSubmission = {
+          id: `sub-${hw.id}-${studentId}`,
+          homeworkId: hw.id,
+          studentId: studentId,
+          studentName: student.displayName,
+          studentNumber: student.schoolNumber || '',
+          studentClass: student.classGrade || hw.targetClass || '',
+          status: 'pending',
+          updatedAt: new Date().toISOString()
+        };
+        this.cache.submissions.push(freshSub);
+        cacheChanged = true;
+      }
+    });
+
+    if (cacheChanged) {
+      this.saveCache(this.cache, false);
+    }
+
     return this.cache.submissions.filter(s => s.studentId === studentId);
   }
 
@@ -2665,11 +3135,16 @@ class DataService {
     return all.filter(a => {
       // Teachers only announcements are never shown to students/parents
       if (a.targetAudience === 'teachers') return false;
-      if (a.targetAudience === 'all' || a.targetAudience === 'students') return true;
+      if (a.targetAudience === 'all' || a.targetAudience === 'students' || !a.targetAudience) return true;
       if (a.targetAudience === 'class') {
+        if (a.targetClass === 'Tüm Okul' || normalizeClassName(a.targetClass) === 'TÜMOKUL') return true;
+        if (a.targetClasses && a.targetClasses.some(c => c === 'Tüm Okul' || normalizeClassName(c) === 'TÜMOKUL')) return true;
         if (!cleanNorm) return false;
-        if (a.targetClasses && a.targetClasses.some(c => c === 'Tüm Okul' || normalizeClassName(c) === cleanNorm)) return true;
-        if (a.targetClass && (a.targetClass === 'Tüm Okul' || normalizeClassName(a.targetClass) === cleanNorm)) return true;
+        if (a.targetClasses && a.targetClasses.some(c => normalizeClassName(c) === cleanNorm)) return true;
+        if (a.targetClass) {
+          const parts = a.targetClass.split(',').map(c => normalizeClassName(c.trim()));
+          if (parts.includes(cleanNorm) || parts.includes('TÜMOKUL')) return true;
+        }
       }
       return false;
     });
@@ -2681,11 +3156,16 @@ class DataService {
     return all.filter(a => {
       // Teachers only announcements are never shown to students/parents
       if (a.targetAudience === 'teachers') return false;
-      if (a.targetAudience === 'all' || a.targetAudience === 'students') return true;
+      if (a.targetAudience === 'all' || a.targetAudience === 'students' || !a.targetAudience) return true;
       if (a.targetAudience === 'class') {
+        if (a.targetClass === 'Tüm Okul' || normalizeClassName(a.targetClass) === 'TÜMOKUL') return true;
+        if (a.targetClasses && a.targetClasses.some(c => c === 'Tüm Okul' || normalizeClassName(c) === 'TÜMOKUL')) return true;
         if (normalizedClasses.length === 0) return false;
-        if (a.targetClasses && a.targetClasses.some(c => c === 'Tüm Okul' || normalizedClasses.includes(normalizeClassName(c)))) return true;
-        if (a.targetClass && (a.targetClass === 'Tüm Okul' || normalizedClasses.includes(normalizeClassName(a.targetClass)))) return true;
+        if (a.targetClasses && a.targetClasses.some(c => normalizedClasses.includes(normalizeClassName(c)))) return true;
+        if (a.targetClass) {
+          const parts = a.targetClass.split(',').map(c => normalizeClassName(c.trim()));
+          if (parts.some(p => normalizedClasses.includes(p) || p === 'TÜMOKUL')) return true;
+        }
       }
       return false;
     });
@@ -2739,7 +3219,7 @@ class DataService {
     this.saveCache({ ...this.cache, announcements: updated });
 
     try {
-      await updateDoc(doc(db, 'announcements', id), updates as any);
+      await setDoc(doc(db, 'announcements', id), sanitizeForFirestore(updatedAnn), { merge: true });
     } catch (e) {
       console.log('Firebase update announcement error:', e);
     }
@@ -2754,7 +3234,7 @@ class DataService {
     this.saveCache({ ...this.cache, announcements: updated });
 
     try {
-      await updateDoc(doc(db, 'announcements', id), { pinned: newPinned });
+      await setDoc(doc(db, 'announcements', id), { pinned: newPinned }, { merge: true });
     } catch (e) {
       console.log('Firebase pin announcement error:', e);
     }

@@ -24,7 +24,20 @@ export const INITIAL_CLASSES: SchoolClass[] = [
   { id: 'class-12-b', name: '12-B', gradeLevel: 12, branch: 'B', section: 'B', academicYear: '2026-2027', studentCount: 26 }
 ];
 
-export const INITIAL_TEACHERS: UserProfile[] = [];
+export const INITIAL_TEACHERS: UserProfile[] = [
+  {
+    uid: 'teacher-matematik-1',
+    email: 'matematik@gnsial.meb.k12.tr',
+    displayName: 'Ayşe Kaya (Matematik)',
+    role: 'teacher',
+    branch: 'Matematik',
+    phone: '0555 111 2233',
+    password: 'ogretmen123',
+    status: 'active',
+    isOnline: false,
+    createdAt: '2026-09-18T08:00:00.000Z'
+  }
+];
 
 export const INITIAL_ADMIN: UserProfile = {
   uid: 'admin-tlogix',
@@ -32,6 +45,7 @@ export const INITIAL_ADMIN: UserProfile = {
   displayName: 'Tlogix Okul Yönetimi',
   role: 'admin',
   phone: '0555 999 0000',
+  password: 'Gnsial2026!Admin',
   status: 'active',
   isOnline: true,
   createdAt: new Date().toISOString()

@@ -24,6 +24,11 @@ import {
 import confetti from 'canvas-confetti';
 import { dataService } from '../../services/dataService';
 import { ExcelParentRow, ExcelParentImportSummary, UserProfile } from '../../types';
+import { 
+  readExcelWithTurkishSupport, 
+  findRowValue, 
+  fixTurkishMojibake 
+} from '../../utils/excelTurkishUtils';
 
 interface ExcelParentImportModalProps {
   isOpen: boolean;
@@ -109,7 +114,7 @@ export const ExcelParentImportModal: React.FC<ExcelParentImportModalProps> = ({
     }
   };
 
-  // Universal reader supporting all Excel formats: .xlsx, .xls, .csv, .ods, .tsv, .txt
+  // Universal reader supporting all Excel formats with Turkish character preservation
   const processSelectedFile = async (file: File) => {
     setIsProcessingFile(true);
     setErrorMsg(null);
@@ -117,24 +122,8 @@ export const ExcelParentImportModal: React.FC<ExcelParentImportModalProps> = ({
     setImportSummary(null);
 
     try {
-      const buffer = await file.arrayBuffer();
-      const data = new Uint8Array(buffer);
-      
-      // Read with SheetJS - type: 'array' handles all formats and Turkish characters
-      const workbook = XLSX.read(data, { 
-        type: 'array',
-        codepage: 65001 // UTF-8
-      });
-
-      if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
-        throw new Error('Yüklenen tabloda herhangi bir çalışma sayfası (sayfa) bulunamadı.');
-      }
-
-      const firstSheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[firstSheetName];
-      
-      // Convert sheet to JSON array
-      const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+      // Evrensel Türkçe karakter destekli ayrıştırıcı
+      const rawRows = await readExcelWithTurkishSupport(file);
 
       if (!rawRows || rawRows.length === 0) {
         throw new Error('Yüklenen tabloda işlenecek veri satırı bulunamadı.');
@@ -142,38 +131,55 @@ export const ExcelParentImportModal: React.FC<ExcelParentImportModalProps> = ({
 
       // Map columns dynamically by matching Turkish and English keywords
       const normalizedRows: ExcelParentRow[] = rawRows.map((r) => {
-        const keys = Object.keys(r);
-        
-        // Flexible key matcher
-        const findVal = (keywords: string[]) => {
-          for (const key of keys) {
-            const cleanKey = key.trim().toLowerCase()
-              .replace(/[\s_\-\.\/\(\)]/g, '')
-              .replace(/ı/g, 'i')
-              .replace(/ğ/g, 'g')
-              .replace(/ü/g, 'u')
-              .replace(/ş/g, 's')
-              .replace(/ö/g, 'o')
-              .replace(/ç/g, 'c');
-
-            if (keywords.some(kw => cleanKey.includes(kw))) {
-              const val = r[key];
-              if (val !== undefined && val !== null) {
-                return String(val).trim();
-              }
-            }
+        let parentName = findRowValue(r, [
+          'veliadisoyadi', 'veliadsoyad', 'veliismi', 'veliadivesoyadi', 'parentname'
+        ]);
+        if (!parentName) {
+          const pFirst = findRowValue(r, ['veliadi', 'veliad', 'anneadi', 'babaadi']);
+          const pLast = findRowValue(r, ['velisoyadi', 'velisoyad']);
+          if (pFirst || pLast) {
+            parentName = `${pFirst} ${pLast}`.trim();
+          } else {
+            parentName = findRowValue(r, ['veli', 'annebaba', 'adsoyad', 'isim', 'ad', 'parent']);
           }
-          return '';
-        };
+        }
 
-        const parentName = findVal(['veliadisoyadi', 'veliadi', 'veliismi', 'veli', 'annebaba', 'adsoyad', 'isim', 'ad', 'parentname', 'parent']);
-        const parentPhone = findVal(['velitelefonu', 'velitelefon', 'velitel', 'telefon', 'tel', 'phone', 'gsm', 'cep', 'contact']);
-        const parentEmail = findVal(['velieposta', 'velie-posta', 'velimail', 'eposta', 'e-posta', 'email', 'mail']);
-        const parentPassword = findVal(['velisifresi', 'velisifre', 'veliparola', 'sifre', 'parola', 'password']);
-        const studentNumbers = findVal(['ogrenciokulno', 'ogrencino', 'okulno', 'ogrencino1', 'numara', 'ogrencilerno', 'studentno', 'no']);
-        const studentName = findVal(['ogrenciadisoyadi', 'ogrenciadi', 'ogrenciismi', 'ogrenci', 'cocuk', 'studentname']);
-        const relationship = findVal(['yakinlik', 'derece', 'iliski', 'annebaba', 'vasi']);
-        const notes = findVal(['notlar', 'not', 'aciklama', 'notes', 'bilgi']);
+        const parentPhone = findRowValue(r, [
+          'velitelefonu', 'velitelefon', 'velitel', 'telefon', 'tel', 'phone', 'gsm', 'cep', 'contact', 'velicep', 'iletisim'
+        ]);
+        const parentEmail = findRowValue(r, [
+          'velieposta', 'velie-posta', 'velimail', 'eposta', 'e-posta', 'email', 'mail'
+        ]);
+        const parentPassword = findRowValue(r, [
+          'velisifresi', 'velisifre', 'veliparola', 'sifre', 'parola', 'password'
+        ]);
+        const studentNumbers = findRowValue(r, [
+          'ogrenciokulno', 'ogrencino', 'okulno', 'ogrencino1', 'numara', 'ogrencilerno', 'studentno', 'no', 'ogrencinumarasi', 'sirano'
+        ]);
+
+        let studentName = findRowValue(r, [
+          'ogrenciadisoyadi', 'ogrenciadsoyad', 'cocukadisoyadi', 'studentname'
+        ]);
+        if (!studentName) {
+          const sFirst = findRowValue(r, ['ogrenciadi', 'ogrenciad', 'cocukadi']);
+          const sLast = findRowValue(r, ['ogrencisoyadi', 'ogrencisoyad', 'cocuksoyadi']);
+          if (sFirst || sLast) {
+            studentName = `${sFirst} ${sLast}`.trim();
+          } else {
+            studentName = findRowValue(r, ['ogrenciismi', 'ogrenci', 'cocuk']);
+          }
+        }
+        const relationship = findRowValue(r, [
+          'yakinlik', 'derece', 'iliski', 'annebaba', 'vasi', 'relationship'
+        ]);
+        const notes = findRowValue(r, [
+          'notlar', 'not', 'aciklama', 'notes', 'bilgi'
+        ]);
+
+        const cleanParentName = fixTurkishMojibake(parentName);
+        const cleanStudentName = fixTurkishMojibake(studentName);
+        const cleanRelationship = fixTurkishMojibake(relationship);
+        const cleanNotes = fixTurkishMojibake(notes);
 
         // Check matching students in the system
         const parsedNos = studentNumbers

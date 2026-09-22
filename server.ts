@@ -324,22 +324,42 @@ async function syncAllToSupabaseRelationalTables(client: SupabaseClient, store: 
       for (const hw of store.homeworks) {
         const hwUuid = toValidUuid(hw.id);
         const teacherUuid = hw.teacherId ? toValidUuid(hw.teacherId) : defaultTeacherUuid;
-        const classUuid = hw.targetClass 
-          ? (classIdMap.get(hw.targetClass.toUpperCase()) || (classIdMap.size > 0 ? classIdMap.values().next().value : null))
-          : (classIdMap.size > 0 ? classIdMap.values().next().value : null);
 
-        if (classUuid) {
-          const { error: hwErr } = await client.from('assignments').upsert({
-            id: hwUuid,
-            title: hw.title || 'Ödev',
-            description: hw.description || `${hw.subject || 'Ders'} ödevi`,
-            class_id: classUuid,
-            teacher_id: teacherUuid,
-            due_date: hw.dueDate ? new Date(hw.dueDate).toISOString() : new Date(Date.now() + 86400000 * 7).toISOString()
-          });
-          if (!hwErr) stats.assignments++;
-          else stats.errors.push(`Assignment (${hw.title}): ${hwErr.message}`);
-        }
+        try {
+          await client.from('profiles').upsert({
+            id: teacherUuid,
+            email: hw.teacherEmail || `${(hw.teacherName || 'ogretmen').toLowerCase().replace(/\s+/g, '.')}@gnsial.meb.k12.tr`,
+            full_name: hw.teacherName || 'Öğretmen',
+            role: 'teacher'
+          }, { onConflict: 'id' });
+        } catch {}
+
+        const classUuid = hw.targetClass && hw.targetClass !== 'Tüm Okul' 
+          ? (classIdMap.get(hw.targetClass.toUpperCase()) || null)
+          : null;
+
+        const { error: hwErr } = await client.from('assignments').upsert({
+          id: hwUuid,
+          title: hw.title || 'Ödev',
+          subject: hw.subject || 'Genel',
+          description: hw.description || `${hw.subject || 'Ders'} ödevi`,
+          class_id: classUuid,
+          target_class: hw.targetClass || 'Tüm Okul',
+          target_classes: hw.targetClasses || null,
+          target_type: hw.targetType || 'class',
+          target_student_ids: hw.targetStudentIds ? hw.targetStudentIds.map(toValidUuid) : null,
+          teacher_id: teacherUuid,
+          due_date: hw.dueDate ? new Date(hw.dueDate).toISOString() : new Date(Date.now() + 86400000 * 7).toISOString(),
+          due_time: hw.dueTime || '23:59',
+          max_score: hw.maxScore || 100,
+          xp_reward: hw.xpReward || 50,
+          attachments: hw.attachments || [],
+          rubric: hw.rubric || [],
+          created_at: hw.createdAt || new Date().toISOString()
+        }, { onConflict: 'id' });
+
+        if (!hwErr) stats.assignments++;
+        else stats.errors.push(`Assignment (${hw.title}): ${hwErr.message}`);
       }
     }
 
@@ -351,14 +371,24 @@ async function syncAllToSupabaseRelationalTables(client: SupabaseClient, store: 
         const stUuid = toValidUuid(sub.studentId);
         const dbStatus = sub.status === 'completed' ? 'completed' : 'pending';
 
+        try {
+          await client.from('profiles').upsert({
+            id: stUuid,
+            email: `${sub.schoolNumber || sub.studentId || 'ogrenci'}@gnsial.meb.k12.tr`,
+            full_name: sub.studentName || 'Öğrenci',
+            role: 'student'
+          }, { onConflict: 'id' });
+        } catch {}
+
         const { error: subErr } = await client.from('assignment_submissions').upsert({
           id: subUuid,
           assignment_id: hwUuid,
           student_id: stUuid,
           status: dbStatus,
           submitted_at: sub.submittedAt || null,
-          notes: sub.teacherFeedback || sub.notes || null
-        });
+          notes: sub.teacherFeedback || sub.studentNote || sub.notes || null
+        }, { onConflict: 'id' });
+
         if (!subErr) stats.submissions++;
         else stats.errors.push(`Submission (${sub.id}): ${subErr.message}`);
       }
@@ -869,6 +899,384 @@ app.get('/api/backup/supabase/history', async (req, res) => {
   }
 });
 
+// ================= HOMEWORK / ASSIGNMENT API ENDPOINTS =================
+app.get('/api/homeworks', async (req, res) => {
+  const { classGrade, teacherId, studentId } = req.query as Record<string, string>;
+  const { client } = getSupabaseInfo();
+
+  if (!inMemoryLatestState || !Array.isArray(inMemoryLatestState.homeworks) || inMemoryLatestState.homeworks.length === 0) {
+    if (client) {
+      try {
+        const { data: backup } = await client
+          .from('school_backups')
+          .select('payload')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+        if (backup?.payload?.homeworks && Array.isArray(backup.payload.homeworks) && backup.payload.homeworks.length > 0) {
+          if (!inMemoryLatestState) inMemoryLatestState = backup.payload;
+          else inMemoryLatestState.homeworks = backup.payload.homeworks;
+        }
+      } catch {}
+
+      // If still empty, query relational assignments table directly
+      if (!inMemoryLatestState?.homeworks || inMemoryLatestState.homeworks.length === 0) {
+        try {
+          const { data: dbAssignments } = await client
+            .from('assignments')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+          if (dbAssignments && dbAssignments.length > 0) {
+            const mappedHw = dbAssignments.map((a: any) => ({
+              id: a.id,
+              title: a.title,
+              subject: a.subject || 'Ders',
+              description: a.description || '',
+              targetClass: a.target_class || 'Tüm Okul',
+              targetClasses: a.target_classes || null,
+              targetType: a.target_type || 'class',
+              targetStudentIds: a.target_student_ids || null,
+              teacherId: a.teacher_id,
+              dueDate: a.due_date ? a.due_date.split('T')[0] : '',
+              dueTime: a.due_time || '23:59',
+              maxScore: a.max_score || 100,
+              xpReward: a.xp_reward || 50,
+              attachments: a.attachments || [],
+              rubric: a.rubric || [],
+              createdAt: a.created_at
+            }));
+
+            if (!inMemoryLatestState) {
+              inMemoryLatestState = { users: [], classes: [], homeworks: [], submissions: [], grades: [], attendance: [], announcements: [] };
+            }
+            inMemoryLatestState.homeworks = mappedHw;
+          }
+        } catch {}
+      }
+    }
+  }
+
+  let homeworks: any[] = inMemoryLatestState?.homeworks || [];
+
+  if (teacherId) {
+    homeworks = homeworks.filter(h => h.teacherId === teacherId);
+  }
+  if (classGrade) {
+    const clean = classGrade.trim().toUpperCase();
+    homeworks = homeworks.filter(h => 
+      h.targetClass === 'Tüm Okul' ||
+      (h.targetClass && h.targetClass.toUpperCase() === clean) ||
+      (h.targetClasses && h.targetClasses.some((tc: string) => tc === 'Tüm Okul' || tc.trim().toUpperCase() === clean)) ||
+      (h.targetClass && h.targetClass.split(',').some((tc: string) => tc.trim().toUpperCase() === clean))
+    );
+  }
+  if (studentId) {
+    homeworks = homeworks.filter(h => 
+      !h.targetType || h.targetType === 'class' || 
+      (h.targetStudentIds && h.targetStudentIds.includes(studentId))
+    );
+  }
+
+  res.json({ success: true, homeworks });
+});
+
+app.post('/api/homeworks', async (req, res) => {
+  const newHw = req.body;
+  if (!newHw || !newHw.title) {
+    return res.status(400).json({ success: false, message: 'Ödev başlığı zorunludur' });
+  }
+
+  const hwId = newHw.id || `hw-${Date.now()}`;
+  const record = {
+    ...newHw,
+    id: hwId,
+    createdAt: newHw.createdAt || new Date().toISOString()
+  };
+
+  if (!inMemoryLatestState) {
+    inMemoryLatestState = { users: [], classes: [], homeworks: [], submissions: [], grades: [], attendance: [], announcements: [] };
+  }
+  if (!Array.isArray(inMemoryLatestState.homeworks)) inMemoryLatestState.homeworks = [];
+
+  const existingIdx = inMemoryLatestState.homeworks.findIndex((h: any) => h.id === hwId);
+  if (existingIdx >= 0) {
+    inMemoryLatestState.homeworks[existingIdx] = record;
+  } else {
+    inMemoryLatestState.homeworks.unshift(record);
+  }
+
+  // Sync with Supabase assignments table if client available
+  const { client } = getSupabaseInfo();
+  if (client) {
+    try {
+      const hwUuid = toValidUuid(record.id);
+      const teacherUuid = record.teacherId ? toValidUuid(record.teacherId) : toValidUuid('admin-root-tlogix');
+
+      try {
+        await client.from('profiles').upsert({
+          id: teacherUuid,
+          email: record.teacherEmail || `${(record.teacherName || 'ogretmen').toLowerCase().replace(/\s+/g, '.')}@gnsial.meb.k12.tr`,
+          full_name: record.teacherName || 'Öğretmen',
+          role: 'teacher'
+        }, { onConflict: 'id' });
+      } catch {}
+
+      await client.from('assignments').upsert({
+        id: hwUuid,
+        title: record.title,
+        subject: record.subject || 'Genel',
+        description: record.description || `${record.subject || 'Ders'} ödevi`,
+        target_class: record.targetClass || 'Tüm Okul',
+        target_classes: record.targetClasses || null,
+        target_type: record.targetType || 'class',
+        target_student_ids: record.targetStudentIds ? record.targetStudentIds.map(toValidUuid) : null,
+        teacher_id: teacherUuid,
+        due_date: record.dueDate ? new Date(record.dueDate).toISOString() : new Date(Date.now() + 86400000 * 7).toISOString(),
+        due_time: record.dueTime || '23:59',
+        max_score: record.maxScore || 100,
+        xp_reward: record.xpReward || 50,
+        attachments: record.attachments || [],
+        rubric: record.rubric || [],
+        created_at: record.createdAt || new Date().toISOString()
+      }, { onConflict: 'id' });
+
+      // Persist state snapshot to school_backups
+      await client.from('school_backups').insert({
+        backup_type: 'homework_create',
+        stats: {
+          totalHomeworks: inMemoryLatestState.homeworks.length,
+          totalUsers: inMemoryLatestState.users?.length || 0
+        },
+        payload: inMemoryLatestState,
+        created_at: new Date().toISOString()
+      });
+    } catch (e: any) {
+      console.warn('[Supabase Homework Create Warn]:', e.message);
+    }
+  }
+
+  broadcastStateUpdate(inMemoryLatestState);
+  res.json({ success: true, homework: record });
+});
+
+app.put('/api/homeworks/:id', async (req, res) => {
+  const { id } = req.params;
+  const updates = req.body;
+  if (!inMemoryLatestState || !Array.isArray(inMemoryLatestState.homeworks)) {
+    return res.status(404).json({ success: false, message: 'Ödev bulunamadı' });
+  }
+
+  const idx = inMemoryLatestState.homeworks.findIndex((h: any) => h.id === id);
+  if (idx < 0) {
+    return res.status(404).json({ success: false, message: 'Ödev bulunamadı' });
+  }
+
+  const updatedHw = { ...inMemoryLatestState.homeworks[idx], ...updates, updatedAt: new Date().toISOString() };
+  inMemoryLatestState.homeworks[idx] = updatedHw;
+
+  // Supabase update
+  const { client } = getSupabaseInfo();
+  if (client) {
+    try {
+      const hwUuid = toValidUuid(id);
+      await client.from('assignments').update({
+        title: updatedHw.title,
+        subject: updatedHw.subject,
+        description: updatedHw.description,
+        target_class: updatedHw.targetClass,
+        target_classes: updatedHw.targetClasses || null,
+        target_type: updatedHw.targetType,
+        target_student_ids: updatedHw.targetStudentIds ? updatedHw.targetStudentIds.map(toValidUuid) : null,
+        due_date: updatedHw.dueDate ? new Date(updatedHw.dueDate).toISOString() : null,
+        due_time: updatedHw.dueTime,
+        max_score: updatedHw.maxScore,
+        xp_reward: updatedHw.xpReward,
+        attachments: updatedHw.attachments || [],
+        rubric: updatedHw.rubric || [],
+        updated_at: new Date().toISOString()
+      }).eq('id', hwUuid);
+
+      await client.from('school_backups').insert({
+        backup_type: 'homework_update',
+        stats: { totalHomeworks: inMemoryLatestState.homeworks.length },
+        payload: inMemoryLatestState,
+        created_at: new Date().toISOString()
+      });
+    } catch (e: any) {
+      console.warn('[Supabase Homework Update Warn]:', e.message);
+    }
+  }
+
+  broadcastStateUpdate(inMemoryLatestState);
+  res.json({ success: true, homework: updatedHw });
+});
+
+app.delete('/api/homeworks/:id', async (req, res) => {
+  const { id } = req.params;
+  if (inMemoryLatestState && Array.isArray(inMemoryLatestState.homeworks)) {
+    inMemoryLatestState.homeworks = inMemoryLatestState.homeworks.filter((h: any) => h.id !== id);
+    if (Array.isArray(inMemoryLatestState.submissions)) {
+      inMemoryLatestState.submissions = inMemoryLatestState.submissions.filter((s: any) => s.homeworkId !== id);
+    }
+  }
+
+  const { client } = getSupabaseInfo();
+  if (client) {
+    try {
+      const hwUuid = toValidUuid(id);
+      await client.from('assignment_submissions').delete().eq('assignment_id', hwUuid);
+      await client.from('assignments').delete().eq('id', hwUuid);
+
+      if (inMemoryLatestState) {
+        await client.from('school_backups').insert({
+          backup_type: 'homework_delete',
+          stats: { totalHomeworks: inMemoryLatestState.homeworks?.length || 0 },
+          payload: inMemoryLatestState,
+          created_at: new Date().toISOString()
+        });
+      }
+    } catch {}
+  }
+
+  if (inMemoryLatestState) broadcastStateUpdate(inMemoryLatestState);
+  res.json({ success: true, message: 'Ödev silindi' });
+});
+
+app.get('/api/homeworks/:id/submissions', async (req, res) => {
+  const { id } = req.params;
+  const store = inMemoryLatestState;
+  const submissions = (store?.submissions || []).filter((s: any) => s.homeworkId === id);
+  res.json({ success: true, submissions });
+});
+
+app.post('/api/homeworks/:id/submissions/status', async (req, res) => {
+  const { id } = req.params;
+  const { submissionId, studentId, status, score, feedback, rubricScores, teacherName } = req.body;
+
+  if (!inMemoryLatestState) {
+    inMemoryLatestState = { users: [], classes: [], homeworks: [], submissions: [], grades: [], attendance: [], announcements: [] };
+  }
+  if (!Array.isArray(inMemoryLatestState.submissions)) inMemoryLatestState.submissions = [];
+
+  let sub = inMemoryLatestState.submissions.find((s: any) => 
+    (submissionId && s.id === submissionId) || (s.homeworkId === id && s.studentId === studentId)
+  );
+
+  const nowIso = new Date().toISOString();
+  if (sub) {
+    sub.status = status;
+    if (score !== undefined) sub.score = score;
+    if (feedback !== undefined) sub.feedback = feedback;
+    if (rubricScores !== undefined) sub.rubricScores = rubricScores;
+    if (teacherName) sub.gradedByTeacher = teacherName;
+    sub.gradedAt = nowIso;
+  } else {
+    sub = {
+      id: submissionId || `sub-${id}-${studentId || Date.now()}`,
+      homeworkId: id,
+      studentId: studentId || '',
+      status: status || 'pending',
+      score,
+      feedback,
+      rubricScores,
+      gradedByTeacher: teacherName,
+      gradedAt: nowIso
+    };
+    inMemoryLatestState.submissions.push(sub);
+  }
+
+  // Supabase update
+  const { client } = getSupabaseInfo();
+  if (client && sub.studentId) {
+    try {
+      await client.from('assignment_submissions').upsert({
+        id: toValidUuid(sub.id),
+        assignment_id: toValidUuid(id),
+        student_id: toValidUuid(sub.studentId),
+        status: sub.status === 'completed' ? 'completed' : 'pending',
+        score: sub.score !== undefined ? sub.score : null,
+        feedback: sub.feedback || null,
+        rubric_scores: sub.rubricScores || [],
+        updated_at: nowIso
+      }, { onConflict: 'id' });
+
+      await client.from('school_backups').insert({
+        backup_type: 'submission_status',
+        stats: { totalSubmissions: inMemoryLatestState.submissions.length },
+        payload: inMemoryLatestState,
+        created_at: nowIso
+      });
+    } catch {}
+  }
+
+  broadcastStateUpdate(inMemoryLatestState);
+  res.json({ success: true, submission: sub });
+});
+
+app.post('/api/homeworks/:id/submit', async (req, res) => {
+  const { id } = req.params;
+  const { studentId, studentNote, attachments, studentName, schoolNumber, classGrade } = req.body;
+
+  if (!inMemoryLatestState) {
+    inMemoryLatestState = { users: [], classes: [], homeworks: [], submissions: [], grades: [], attendance: [], announcements: [] };
+  }
+  if (!Array.isArray(inMemoryLatestState.submissions)) inMemoryLatestState.submissions = [];
+
+  let sub = inMemoryLatestState.submissions.find((s: any) => s.homeworkId === id && s.studentId === studentId);
+  const nowIso = new Date().toISOString();
+
+  if (sub) {
+    sub.status = 'completed';
+    sub.submittedAt = nowIso;
+    sub.studentNote = studentNote || sub.studentNote;
+    if (attachments && attachments.length > 0) {
+      sub.attachments = [...(sub.attachments || []), ...attachments];
+    }
+  } else {
+    sub = {
+      id: `sub-${id}-${studentId}`,
+      homeworkId: id,
+      studentId,
+      studentName: studentName || 'Öğrenci',
+      schoolNumber: schoolNumber || '',
+      classGrade: classGrade || '',
+      status: 'completed',
+      submittedAt: nowIso,
+      studentNote,
+      attachments: attachments || []
+    };
+    inMemoryLatestState.submissions.push(sub);
+  }
+
+  // Supabase update
+  const { client } = getSupabaseInfo();
+  if (client && studentId) {
+    try {
+      await client.from('assignment_submissions').upsert({
+        id: toValidUuid(sub.id),
+        assignment_id: toValidUuid(id),
+        student_id: toValidUuid(studentId),
+        status: 'completed',
+        submitted_at: nowIso,
+        student_note: studentNote || null,
+        attachments: sub.attachments || [],
+        updated_at: nowIso
+      }, { onConflict: 'id' });
+
+      await client.from('school_backups').insert({
+        backup_type: 'submission_submit',
+        stats: { totalSubmissions: inMemoryLatestState.submissions.length },
+        payload: inMemoryLatestState,
+        created_at: nowIso
+      });
+    } catch {}
+  }
+
+  broadcastStateUpdate(inMemoryLatestState);
+  res.json({ success: true, submission: sub });
+});
+
 app.all('/api/*', (req, res) => {
   res.status(404).json({
     error: `API uç noktası bulunamadı: ${req.method} ${req.path}`,
@@ -890,7 +1298,10 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR !== 'true' ? undefined : false,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -902,8 +1313,16 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Server] GNSİAL OYS Server running on http://0.0.0.0:${PORT}`);
+  });
+
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[Server] Port ${PORT} is already in use.`);
+    } else {
+      console.error('[Server Error]:', err);
+    }
   });
 }
 

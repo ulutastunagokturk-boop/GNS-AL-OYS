@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { dataService } from '../../services/dataService';
+import { homeworkService } from '../../services/homeworkService';
 import { Homework, HomeworkSubmission, Attachment } from '../../types';
 import { 
   BookOpen, 
@@ -31,20 +31,22 @@ export const StudentHomeworks: React.FC = () => {
   const [studentAttachmentName, setStudentAttachmentName] = useState<string | null>(null);
 
   const [homeworks, setHomeworks] = useState<Homework[]>(() => 
-    currentUser ? dataService.getHomeworksForStudent(currentUser.classGrade, currentUser.uid) : []
+    currentUser ? homeworkService.getHomeworksForStudent(currentUser.classGrade, currentUser.uid) : []
   );
   const [studentSubmissions, setStudentSubmissions] = useState<HomeworkSubmission[]>(() => 
-    currentUser ? dataService.getSubmissionsForStudent(currentUser.uid) : []
+    currentUser ? homeworkService.getSubmissionsForStudent(currentUser.uid) : []
   );
 
   React.useEffect(() => {
     if (!currentUser) return;
     const update = () => {
-      setHomeworks([...dataService.getHomeworksForStudent(currentUser.classGrade, currentUser.uid)]);
-      setStudentSubmissions([...dataService.getSubmissionsForStudent(currentUser.uid)]);
+      setHomeworks([...homeworkService.getHomeworksForStudent(currentUser.classGrade, currentUser.uid)]);
+      setStudentSubmissions([...homeworkService.getSubmissionsForStudent(currentUser.uid)]);
     };
     update();
-    const unsub = dataService.subscribe(update);
+    // Buluttan en güncel ödevleri ve durumları anında çek
+    homeworkService.syncHomeworksFromCloud().then(update);
+    const unsub = homeworkService.subscribe(update);
     return unsub;
   }, [currentUser?.classGrade, currentUser?.uid]);
 
@@ -67,7 +69,13 @@ export const StudentHomeworks: React.FC = () => {
       uploadedAt: new Date().toISOString()
     }] : undefined;
 
-    await dataService.submitHomework(submittingHw.id, currentUser.uid, studentNote, attachments);
+    await homeworkService.submitHomework(submittingHw.id, currentUser.uid, {
+      studentNote,
+      attachments,
+      studentName: currentUser.displayName,
+      schoolNumber: currentUser.schoolNumber,
+      classGrade: currentUser.classGrade
+    });
     setSubmittingHw(null);
     setStudentNote('');
     setStudentAttachmentName(null);
