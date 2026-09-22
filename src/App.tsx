@@ -10,6 +10,7 @@ import { ParentDashboard } from './components/parent/ParentDashboard';
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { AchievementsView } from './components/achievements/AchievementsView';
 import { WeeklyScheduleView } from './components/schedule/WeeklyScheduleView';
+import { errorMonitoringService } from './services/errorMonitoringService';
 import { 
   GraduationCap, 
   BookOpen, 
@@ -37,6 +38,11 @@ const MainContent: React.FC = () => {
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | null>(null);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('homeworks');
+
+  // Initialize Error Monitoring
+  useEffect(() => {
+    errorMonitoringService.init(() => currentUser ? { uid: currentUser.uid, role: currentUser.role } : null);
+  }, [currentUser]);
 
   // Reset default active tab on role switch
   useEffect(() => {
@@ -90,6 +96,7 @@ const MainContent: React.FC = () => {
         case 'roles': return 'Firestore Rol & Yetki Atamaları';
         case 'classes': return 'Sınıf & Şube Yapısı';
         case 'system': return 'Geliştirici & Sistem Ayarları';
+        case 'system-errors': return 'Sistem Hata İzleme & Teşhis Paneli';
         case 'achievements': return 'Öğrenci Başarı & Gamification';
         default: return 'Yönetim Paneli';
       }

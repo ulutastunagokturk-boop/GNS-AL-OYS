@@ -247,72 +247,37 @@ CREATE POLICY "Allow school backup operations" ON public.school_backups
 -- G. ÖDEVLER (assignments) VE TESLİMLER (assignment_submissions) RLS POLİTİKALARI
 -- ------------------------------------------------------------------------------
 DROP POLICY IF EXISTS "Assignments viewable by authenticated users" ON public.assignments;
-CREATE POLICY "Assignments viewable by authenticated users"
+DROP POLICY IF EXISTS "Staff manage assignments" ON public.assignments;
+DROP POLICY IF EXISTS "Allow assignment read" ON public.assignments;
+DROP POLICY IF EXISTS "Allow assignment write" ON public.assignments;
+
+CREATE POLICY "Allow assignment read"
     ON public.assignments FOR SELECT
-    TO authenticated
+    TO anon, authenticated
     USING (true);
 
-DROP POLICY IF EXISTS "Staff manage assignments" ON public.assignments;
-CREATE POLICY "Staff manage assignments"
+CREATE POLICY "Allow assignment write"
     ON public.assignments FOR ALL
-    TO authenticated
-    USING (
-        teacher_id = auth.uid() OR
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE (id = auth.uid() OR email = auth.email()) 
-            AND role IN ('teacher', 'admin')
-        )
-    )
-    WITH CHECK (
-        teacher_id = auth.uid() OR
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE (id = auth.uid() OR email = auth.email()) 
-            AND role IN ('teacher', 'admin')
-        )
-    );
+    TO anon, authenticated
+    USING (true)
+    WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Submissions viewable by student, parent and teacher" ON public.assignment_submissions;
-CREATE POLICY "Submissions viewable by student, parent and teacher"
-    ON public.assignment_submissions FOR SELECT
-    TO authenticated
-    USING (
-        student_id = auth.uid() OR
-        student_id IN (
-            SELECT psr.student_id FROM public.parent_student_relations psr
-            JOIN public.parents p ON p.id = psr.parent_id
-            WHERE p.user_id = auth.uid() OR p.id = auth.uid()
-        ) OR
-        EXISTS (
-            SELECT 1 FROM public.assignments a
-            WHERE a.id = assignment_id AND (
-                a.teacher_id = auth.uid() OR 
-                EXISTS (SELECT 1 FROM public.profiles WHERE (id = auth.uid() OR email = auth.email()) AND role IN ('teacher', 'admin'))
-            )
-        )
-    );
-
 DROP POLICY IF EXISTS "Students can submit assignments" ON public.assignment_submissions;
-CREATE POLICY "Students can submit assignments"
-    ON public.assignment_submissions FOR INSERT
-    TO authenticated
-    WITH CHECK (student_id = auth.uid());
-
 DROP POLICY IF EXISTS "Users can update their submissions" ON public.assignment_submissions;
-CREATE POLICY "Users can update their submissions"
-    ON public.assignment_submissions FOR UPDATE
-    TO authenticated
-    USING (
-        student_id = auth.uid() OR
-        EXISTS (
-            SELECT 1 FROM public.assignments a
-            WHERE a.id = assignment_id AND (
-                a.teacher_id = auth.uid() OR 
-                EXISTS (SELECT 1 FROM public.profiles WHERE (id = auth.uid() OR email = auth.email()) AND role IN ('teacher', 'admin'))
-            )
-        )
-    );
+DROP POLICY IF EXISTS "Allow submission read" ON public.assignment_submissions;
+DROP POLICY IF EXISTS "Allow submission write" ON public.assignment_submissions;
+
+CREATE POLICY "Allow submission read"
+    ON public.assignment_submissions FOR SELECT
+    TO anon, authenticated
+    USING (true);
+
+CREATE POLICY "Allow submission write"
+    ON public.assignment_submissions FOR ALL
+    TO anon, authenticated
+    USING (true)
+    WITH CHECK (true);
 
 -- İndeksler
 CREATE INDEX IF NOT EXISTS idx_parent_student_rel ON public.parent_student_relations(parent_id, student_id);

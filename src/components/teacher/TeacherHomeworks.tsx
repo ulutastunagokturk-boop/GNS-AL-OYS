@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { dataService, normalizeClassName } from '../../services/dataService';
+import { dataService, normalizeClassName, isAllSchool } from '../../services/dataService';
 import { homeworkService } from '../../services/homeworkService';
 import { Homework, HomeworkSubmission, HomeworkStatus, RubricItem, Attachment, UserProfile, SchoolClass } from '../../types';
 import { 
@@ -81,6 +81,7 @@ export const TeacherHomeworks: React.FC = () => {
   const [editingHomework, setEditingHomework] = useState<Homework | null>(null);
   const [activeTrackingHomework, setActiveTrackingHomework] = useState<Homework | null>(null);
   const [deleteConfirmHw, setDeleteConfirmHw] = useState<{ id: string; title: string } | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Form State
   const [title, setTitle] = useState('');
@@ -116,6 +117,7 @@ export const TeacherHomeworks: React.FC = () => {
 
   const handleOpenCreateModal = () => {
     setEditingHomework(null);
+    setFormError(null);
     setTitle('');
     setDescription('');
     setSubject(currentUser?.branch || 'Matematik');
@@ -133,6 +135,7 @@ export const TeacherHomeworks: React.FC = () => {
 
   const handleOpenEditModal = (hw: Homework) => {
     setEditingHomework(hw);
+    setFormError(null);
     setTitle(hw.title);
     setDescription(hw.description);
     setSubject(hw.subject);
@@ -156,10 +159,10 @@ export const TeacherHomeworks: React.FC = () => {
   // Filtered Homeworks
   const filteredHomeworks = homeworks.filter(hw => {
     if (selectedClassFilter === 'all') return true;
-    if (hw.targetClass === 'Tüm Okul') return true;
+    if (isAllSchool(hw.targetClass)) return true;
     const cleanFilter = normalizeClassName(selectedClassFilter);
-    if (hw.targetClasses && hw.targetClasses.some(tc => tc === 'Tüm Okul' || normalizeClassName(tc) === cleanFilter)) return true;
-    if (hw.targetClass && hw.targetClass.split(',').some(tc => normalizeClassName(tc.trim()) === cleanFilter)) return true;
+    if (hw.targetClasses && hw.targetClasses.some(tc => isAllSchool(tc) || normalizeClassName(tc) === cleanFilter)) return true;
+    if (hw.targetClass && hw.targetClass.split(',').some(tc => isAllSchool(tc) || normalizeClassName(tc.trim()) === cleanFilter)) return true;
     return false;
   });
 
@@ -246,9 +249,10 @@ export const TeacherHomeworks: React.FC = () => {
     if (!title.trim() || !currentUser) return;
 
     if (targetType === 'student' && selectedStudentIds.length === 0) {
-      alert('Lütfen ödevi atamak için en az bir öğrenci seçiniz.');
+      setFormError('Lütfen ödevi atamak için en az bir öğrenci seçiniz.');
       return;
     }
+    setFormError(null);
 
     let targetClassStr = 'Tüm Okul';
     let targetClassesArray: string[] | undefined = undefined;
@@ -504,6 +508,13 @@ export const TeacherHomeworks: React.FC = () => {
 
             <form onSubmit={handleCreateHomework} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
               
+              {formError && (
+                <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 rounded-xl flex items-center gap-2 text-rose-700 dark:text-rose-300 text-xs font-semibold">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{formError}</span>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                   Ödev Başlığı <span className="text-rose-500">*</span>

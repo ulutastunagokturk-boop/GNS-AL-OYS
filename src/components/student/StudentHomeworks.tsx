@@ -28,7 +28,9 @@ export const StudentHomeworks: React.FC = () => {
   const [filter, setFilter] = useState<'all' | 'pending' | 'completed'>('all');
   const [submittingHw, setSubmittingHw] = useState<Homework | null>(null);
   const [studentNote, setStudentNote] = useState('');
-  const [studentAttachmentName, setStudentAttachmentName] = useState<string | null>(null);
+  const [studentAttachments, setStudentAttachments] = useState<Attachment[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const [homeworks, setHomeworks] = useState<Homework[]>(() => 
     currentUser ? homeworkService.getHomeworksForStudent(currentUser.classGrade, currentUser.uid) : []
@@ -56,33 +58,88 @@ export const StudentHomeworks: React.FC = () => {
     return studentSubmissions.find(s => s.homeworkId === hwId);
   };
 
+  const handleOpenSubmitModal = (hw: Homework) => {
+    const existing = getSubmissionForHomework(hw.id);
+    setSubmittingHw(hw);
+    setSubmitError(null);
+    setStudentNote(existing?.submissionNote || '');
+    setStudentAttachments(existing?.attachments || []);
+  };
+
+  const handleStudentFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    Array.from(files).forEach(file => {
+      if (file.size > 8 * 1024 * 1024) {
+        alert(`"${file.name}" dosyası çok büyük (maksimum 8MB yüklenebilir).`);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const newAtt: Attachment = {
+          id: `att-st-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          name: file.name,
+          url: reader.result as string,
+          size: `${(file.size / 1024).toFixed(1)} KB`,
+          type: file.type.includes('pdf') ? 'pdf' : file.type.startsWith('image/') ? 'image' : 'doc',
+          uploadedAt: new Date().toISOString()
+        };
+        setStudentAttachments(prev => [...prev, newAtt]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleAddSampleAttachment = () => {
+    const sampleAtt: Attachment = {
+      id: `att-st-${Date.now()}`,
+      name: 'Odev_Cozumu_Defter_Fotografi.pdf',
+      url: '#',
+      size: '2.4 MB',
+      type: 'pdf',
+      uploadedAt: new Date().toISOString()
+    };
+    setStudentAttachments(prev => [...prev, sampleAtt]);
+  };
+
+  const handleRemoveAttachment = (id: string) => {
+    setStudentAttachments(prev => prev.filter(a => a.id !== id));
+  };
+
   const handleStudentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!submittingHw) return;
-
-    const attachments: Attachment[] | undefined = studentAttachmentName ? [{
-      id: `att-st-${Date.now()}`,
-      name: studentAttachmentName,
-      url: '#',
-      size: '3.1 MB',
-      type: 'pdf',
-      uploadedAt: new Date().toISOString()
-    }] : undefined;
-
-    await homeworkService.submitHomework(submittingHw.id, currentUser.uid, {
-      studentNote,
-      attachments,
-      studentName: currentUser.displayName,
-      schoolNumber: currentUser.schoolNumber,
-      classGrade: currentUser.classGrade
-    });
-    setSubmittingHw(null);
-    setStudentNote('');
-    setStudentAttachmentName(null);
+    if (!currentUser?.uid) {
+      setSubmitError('Kullanıcı oturumu doğrulanamadı. Lütfen oturumu yenileyin.');
+      return;
+    }
 
     try {
-      confetti({ particleCount: 50, spread: 60, origin: { y: 0.7 } });
-    } catch (e) {}
+      setIsSubmitting(true);
+      setSubmitError(null);
+
+      await homeworkService.submitHomework(submittingHw.id, currentUser.uid, {
+        studentNote,
+        attachments: studentAttachments,
+        studentName: currentUser.displayName,
+        schoolNumber: currentUser.schoolNumber,
+        classGrade: currentUser.classGrade
+      });
+
+      setSubmittingHw(null);
+      setStudentNote('');
+      setStudentAttachments([]);
+      setStudentSubmissions([...homeworkService.getSubmissionsForStudent(currentUser.uid)]);
+
+      try {
+        confetti({ particleCount: 50, spread: 60, origin: { y: 0.7 } });
+      } catch (e) {}
+    } catch (err: any) {
+      console.error('Ödev teslim edilirken hata:', err);
+      setSubmitError(err?.message || 'Ödev teslimi sırasında bir hata oluştu. Lütfen tekrar deneyiniz.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const filtered = homeworks.filter(hw => {
@@ -101,7 +158,7 @@ export const StudentHomeworks: React.FC = () => {
         <div>
           <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
             <BookOpen className="w-5 h-5 text-emerald-500" />
-            Ödevlerim ({currentUser.classGrade} Şubesi)
+            Ödevlerim ({currentUser.classGrade ? `${currentUser.classGrade} Şubesi` : 'Genel'})
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
             Ders ödevlerini inceleyin, ek dokümanları indirin, çözümlerinizi teslim edin ve rubrik puanlarınızı görün.
@@ -229,9 +286,20 @@ export const StudentHomeworks: React.FC = () => {
                         {hw.attachments.map((att, i) => (
                           <a
                             key={i}
-                            href="#"
-                            onClick={(e) => { e.preventDefault(); alert(`"${att.name}" dosya indirme simülasyonu başlatıldı.`); }}
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-indigo-600 dark:text-indigo-300 hover:underline font-semibold"
+                            href={att.url && att.url !== '#' ? att.url : undefined}
+                            download={att.name}
+                            onClick={(e) => {
+                              if (att.url && att.url !== '#') return;
+                              e.preventDefault();
+                              const blob = new Blob([`GNSİAL Ödev Eki: ${att.name}`], { type: 'text/plain;charset=utf-8' });
+                              const url = URL.createObjectURL(blob);
+                              const link = document.createElement('a');
+                              link.href = url;
+                              link.download = att.name;
+                              link.click();
+                              URL.revokeObjectURL(url);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-indigo-600 dark:text-indigo-300 hover:underline font-semibold cursor-pointer"
                           >
                             <FileText className="w-3 h-3" />
                             {att.name} ({att.size})
@@ -280,6 +348,24 @@ export const StudentHomeworks: React.FC = () => {
                       {sub.teacherFeedback}
                     </div>
                   )}
+
+                  {sub?.submissionNote && (
+                    <div className="mt-3 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/60 text-slate-700 dark:text-slate-300 text-xs">
+                      <strong className="block text-[11px] text-slate-500 mb-0.5">Sizin Teslim Notunuz:</strong>
+                      {sub.submissionNote}
+                    </div>
+                  )}
+
+                  {sub?.attachments && sub.attachments.length > 0 && (
+                    <div className="mt-2.5 flex flex-wrap gap-1.5">
+                      {sub.attachments.map((att, i) => (
+                        <span key={i} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-medium">
+                          <Paperclip className="w-3 h-3 text-emerald-500" />
+                          {att.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
@@ -289,16 +375,16 @@ export const StudentHomeworks: React.FC = () => {
                         <Check className="w-4 h-4" /> Teslim edildi ({sub?.submittedAt ? new Date(sub.submittedAt).toLocaleDateString('tr-TR') : 'Tamamlandı'})
                       </span>
                       <button
-                        onClick={() => setSubmittingHw(hw)}
-                        className="text-xs text-slate-500 hover:underline"
+                        onClick={() => handleOpenSubmitModal(hw)}
+                        className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-semibold cursor-pointer"
                       >
                         Teslimi Güncelle
                       </button>
                     </div>
                   ) : (
                     <button
-                      onClick={() => setSubmittingHw(hw)}
-                      className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm shadow-emerald-600/20 transition"
+                      onClick={() => handleOpenSubmitModal(hw)}
+                      className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-sm shadow-emerald-600/20 transition cursor-pointer"
                     >
                       <Check className="w-4 h-4" />
                       Ödevi Tamamladım / Teslim Et (+{hw.xpReward || 50} XP)
@@ -347,47 +433,83 @@ export const StudentHomeworks: React.FC = () => {
                 />
               </div>
 
-              {/* Student File Upload Simulation */}
+              {/* Student File Upload */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                   Çözüm / Doküman Ekle (Opsiyonel)
                 </label>
-                {studentAttachmentName ? (
-                  <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 flex items-center justify-between text-xs text-emerald-800 dark:text-emerald-200">
-                    <span className="flex items-center gap-1.5 font-semibold">
-                      <Paperclip className="w-3.5 h-3.5 text-emerald-600" />
-                      {studentAttachmentName}
-                    </span>
-                    <button type="button" onClick={() => setStudentAttachmentName(null)} className="hover:text-rose-500">
-                      <X className="w-4 h-4" />
-                    </button>
+                {studentAttachments.length > 0 && (
+                  <div className="mb-2 space-y-1.5">
+                    {studentAttachments.map(att => (
+                      <div key={att.id} className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 flex items-center justify-between text-xs text-emerald-800 dark:text-emerald-200">
+                        <span className="flex items-center gap-1.5 font-semibold truncate max-w-[280px]">
+                          <Paperclip className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span className="truncate">{att.name}</span>
+                          <span className="text-[10px] text-emerald-600">({att.size})</span>
+                        </span>
+                        <button type="button" onClick={() => handleRemoveAttachment(att.id)} className="hover:text-rose-500 p-1">
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                ) : (
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <label className="py-2.5 px-3 rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-emerald-500 text-slate-600 dark:text-slate-400 text-xs font-semibold flex items-center justify-center gap-2 transition cursor-pointer">
+                    <Paperclip className="w-4 h-4 text-emerald-500" />
+                    <span>Dosya veya Fotoğraf Seç</span>
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/*,.pdf,.doc,.docx,.txt"
+                      onChange={handleStudentFileUpload}
+                      className="hidden"
+                    />
+                  </label>
+
                   <button
                     type="button"
-                    onClick={() => setStudentAttachmentName('Matematik_Odev_Cozumu_Fotograf.pdf')}
-                    className="w-full py-2.5 px-3 rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-emerald-500 text-slate-600 dark:text-slate-400 text-xs font-semibold flex items-center justify-center gap-2 transition"
+                    onClick={handleAddSampleAttachment}
+                    className="py-2.5 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition"
                   >
-                    <Paperclip className="w-4 h-4 text-emerald-500" />
-                    PDF veya Fotoğraf Yükle (Simüle Et)
+                    <span>+ Örnek Ek Ekle</span>
                   </button>
-                )}
+                </div>
               </div>
+
+              {submitError && (
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-start gap-2">
+                  <span className="font-bold text-rose-500">Hata:</span>
+                  <span>{submitError}</span>
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setSubmittingHw(null)}
-                  className="px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition cursor-pointer disabled:opacity-50"
                 >
                   Vazgeç
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5"
+                  disabled={isSubmitting}
+                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white text-xs font-bold shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
                 >
-                  <Send className="w-3.5 h-3.5" />
-                  Teslimi Onayla & Puanı Al
+                  {isSubmitting ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Teslim Ediliyor...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Teslimi Onayla & Puanı Al</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

@@ -1,5 +1,6 @@
-import { dataService } from './dataService';
+import { dataService, normalizeClassName, isAllSchool } from './dataService';
 import { Homework, HomeworkSubmission, HomeworkStatus, Attachment } from '../types';
+import { errorMonitoringService } from './errorMonitoringService';
 
 export interface HomeworkFilterOptions {
   classGrade?: string;
@@ -36,12 +37,14 @@ export class HomeworkService {
     }
 
     if (filter.classGrade && filter.classGrade !== 'all') {
-      const cleanFilter = filter.classGrade.trim().toUpperCase();
+      const cleanFilter = normalizeClassName(filter.classGrade);
       list = list.filter(h => {
-        if (h.targetClass === 'Tüm Okul') return true;
-        if (h.targetClass && h.targetClass.toUpperCase() === cleanFilter) return true;
-        if (h.targetClasses && h.targetClasses.some(tc => tc === 'Tüm Okul' || tc.trim().toUpperCase() === cleanFilter)) return true;
-        if (h.targetClass && h.targetClass.split(',').some(tc => tc.trim().toUpperCase() === cleanFilter)) return true;
+        if (isAllSchool(h.targetClass)) return true;
+        if (h.targetClasses && h.targetClasses.some(tc => isAllSchool(tc) || normalizeClassName(tc) === cleanFilter)) return true;
+        if (h.targetClass) {
+          const parts = h.targetClass.split(',').map(tc => tc.trim());
+          if (parts.some(tc => isAllSchool(tc) || normalizeClassName(tc) === cleanFilter)) return true;
+        }
         return false;
       });
     }
@@ -299,6 +302,30 @@ export class HomeworkService {
       classGrade?: string;
     }
   ): Promise<void> {
+    if (!studentId) {
+      const authErr = new Error('Ödev teslim hatası: Öğrenci kimlik doğrulaması bulunamadı (studentId boş).');
+      errorMonitoringService.captureLog({
+        message: authErr.message,
+        category: 'auth',
+        severity: 'error',
+        source: 'homeworkService.submitHomework',
+        metadata: { homeworkId }
+      });
+      throw authErr;
+    }
+
+    if (!homeworkId) {
+      const hwErr = new Error('Ödev teslim hatası: Ödev kimliği (homeworkId) bulunamadı.');
+      errorMonitoringService.captureLog({
+        message: hwErr.message,
+        category: 'homework',
+        severity: 'error',
+        source: 'homeworkService.submitHomework',
+        metadata: { studentId }
+      });
+      throw hwErr;
+    }
+
     await dataService.submitHomework(
       homeworkId, 
       studentId, 
@@ -306,9 +333,9 @@ export class HomeworkService {
       data.attachments || []
     );
 
-    // Sync to Supabase
+    // Sync to Supabase & Backend with error handling
     try {
-      await fetch(`/api/homeworks/${homeworkId}/submit`, {
+      const res = await fetch(`/api/homeworks/${homeworkId}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -320,8 +347,28 @@ export class HomeworkService {
           classGrade: data.classGrade
         })
       });
-    } catch (err) {
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        const errMsg = errorData.message || errorData.error || `HTTP ${res.status}`;
+        console.error('[HomeworkService] Ödev sunucu teslim hatası:', errMsg);
+        errorMonitoringService.captureLog({
+          message: `Ödev tesliminde sunucu yazma hatası: ${errMsg}`,
+          category: 'database',
+          severity: 'error',
+          source: 'homeworkService.submitHomework',
+          metadata: { homeworkId, studentId, statusCode: res.status }
+        });
+      }
+    } catch (err: any) {
       console.warn('[HomeworkService] Supabase submit note:', err);
+      errorMonitoringService.captureLog({
+        message: `Ödev tesliminde ağ bağlantısı hatası: ${err?.message || err}`,
+        category: 'network',
+        severity: 'warn',
+        source: 'homeworkService.submitHomework',
+        metadata: { homeworkId, studentId }
+      });
     }
   }
 

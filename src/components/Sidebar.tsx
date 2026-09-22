@@ -22,7 +22,8 @@ import {
   Settings,
   Trophy,
   Cpu,
-  Database
+  Database,
+  Terminal
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 
@@ -271,6 +272,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           sublabel: `${classes.length} Aktif Şube`, 
           icon: School, 
           badge: `${classes.length}` 
+        },
+        { 
+          id: 'system-errors', 
+          label: 'Sistem Hata İzleme', 
+          sublabel: 'Konsol & DB Logları', 
+          icon: Terminal, 
+          badge: 'Hata Log',
+          badgeColor: 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
         },
         { 
           id: 'system', 

@@ -37,15 +37,17 @@ import {
   Zap,
   Eye,
   EyeOff,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Terminal
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { StudentPasswordToolModal } from './StudentPasswordToolModal';
 import { ExcelStudentImportModal } from './ExcelStudentImportModal';
 import { ExcelParentImportModal } from './ExcelParentImportModal';
+import { SystemErrorMonitoringView } from './SystemErrorMonitoringView';
 import { generateUniqueStudentPassword, PasswordStyle } from '../../utils/passwordGenerator';
 
-export type AdminTab = 'overview' | 'users' | 'parents' | 'roles' | 'classes' | 'schedule' | 'cloud-sync';
+export type AdminTab = 'overview' | 'users' | 'parents' | 'roles' | 'classes' | 'schedule' | 'cloud-sync' | 'system-errors';
 
 interface AdminDashboardProps {
   activeTab?: string;
@@ -769,6 +771,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         >
           <Database className="w-4 h-4 text-blue-400" />
           Bulut & Firestore Eşitleme
+        </button>
+
+        <button
+          id="admin-tab-system-errors-btn"
+          onClick={() => setActiveTab('system-errors')}
+          className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold rounded-xl whitespace-nowrap transition cursor-pointer ${
+            activeTab === 'system-errors'
+              ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <Terminal className="w-4 h-4 text-rose-500" />
+          Sistem Hata İzleme
         </button>
       </div>
 
@@ -1903,6 +1918,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {activeTab === 'cloud-sync' && (
         <div className="space-y-4 animate-in fade-in">
           <SupabaseBackupManagerView />
+        </div>
+      )}
+
+      {/* SYSTEM ERROR MONITORING TAB */}
+      {activeTab === 'system-errors' && (
+        <div className="space-y-4 animate-in fade-in">
+          <SystemErrorMonitoringView />
         </div>
       )}
 

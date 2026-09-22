@@ -505,6 +505,62 @@ function savePersistedState(state: any) {
   }
 }
 
+// System Error Monitoring Persistence
+const SYSTEM_LOGS_FILE = path.join(DATA_DIR, 'system_error_logs.json');
+
+function loadSystemLogs(): any[] {
+  try {
+    if (fs.existsSync(SYSTEM_LOGS_FILE)) {
+      const data = fs.readFileSync(SYSTEM_LOGS_FILE, 'utf-8');
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [];
+}
+
+let inMemorySystemLogs: any[] = loadSystemLogs();
+
+function saveSystemLogs(logs: any[]) {
+  try {
+    ensureDataDir();
+    fs.writeFileSync(SYSTEM_LOGS_FILE, JSON.stringify(logs.slice(0, 200), null, 2), 'utf-8');
+  } catch {}
+}
+
+function recordSystemError(log: {
+  message: string;
+  category?: string;
+  severity?: string;
+  source?: string;
+  stack?: string;
+  userId?: string;
+  userRole?: string;
+  path?: string;
+  metadata?: Record<string, any>;
+}) {
+  const newLog = {
+    id: `err-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    timestamp: new Date().toISOString(),
+    message: log.message,
+    category: log.category || 'system',
+    severity: log.severity || 'error',
+    source: log.source || 'server',
+    stack: log.stack,
+    userId: log.userId,
+    userRole: log.userRole,
+    path: log.path,
+    resolved: false,
+    metadata: log.metadata || {}
+  };
+  inMemorySystemLogs.unshift(newLog);
+  if (inMemorySystemLogs.length > 200) {
+    inMemorySystemLogs = inMemorySystemLogs.slice(0, 200);
+  }
+  saveSystemLogs(inMemorySystemLogs);
+  return newLog;
+}
+
 let inMemoryLatestState: any = loadPersistedState();
 const sseClients = new Set<express.Response>();
 
@@ -945,6 +1001,23 @@ app.get('/api/backup/supabase/history', async (req, res) => {
   }
 });
 
+// Helpers for class matching
+function normalizeServerClassName(className?: string): string {
+  if (!className) return '';
+  const trimmed = className.trim();
+  const match = trimmed.match(/^(\d{1,2})\s*[\-_/]?\s*([a-zA-ZçğıöşüÇĞİÖŞÜ])$/);
+  if (match) {
+    return `${match[1]}-${match[2].toLocaleUpperCase('tr-TR')}`;
+  }
+  return trimmed.toLocaleUpperCase('tr-TR').replace(/[\/\\]/g, '-').replace(/\s+/g, '-');
+}
+
+function isAllSchoolServer(str?: string): boolean {
+  if (!str) return false;
+  const s = str.trim().toLowerCase().replace(/[\s\-_/]/g, '');
+  return s === 'tumokul' || s === 'tümokul' || s === 'all' || s === 'herkes' || s === 'tum' || s === 'tüm' || s.includes('tumokul') || s.includes('tümokul');
+}
+
 // ================= HOMEWORK / ASSIGNMENT API ENDPOINTS =================
 app.get('/api/homeworks', async (req, res) => {
   const { classGrade, teacherId, studentId } = req.query as Record<string, string>;
@@ -1009,13 +1082,16 @@ app.get('/api/homeworks', async (req, res) => {
     homeworks = homeworks.filter(h => h.teacherId === teacherId);
   }
   if (classGrade) {
-    const clean = classGrade.trim().toUpperCase();
-    homeworks = homeworks.filter(h => 
-      h.targetClass === 'Tüm Okul' ||
-      (h.targetClass && h.targetClass.toUpperCase() === clean) ||
-      (h.targetClasses && h.targetClasses.some((tc: string) => tc === 'Tüm Okul' || tc.trim().toUpperCase() === clean)) ||
-      (h.targetClass && h.targetClass.split(',').some((tc: string) => tc.trim().toUpperCase() === clean))
-    );
+    const cleanNorm = normalizeServerClassName(classGrade);
+    homeworks = homeworks.filter(h => {
+      if (isAllSchoolServer(h.targetClass)) return true;
+      if (h.targetClasses && h.targetClasses.some((tc: string) => isAllSchoolServer(tc) || normalizeServerClassName(tc) === cleanNorm)) return true;
+      if (h.targetClass) {
+        const parts = h.targetClass.split(',').map((p: string) => p.trim());
+        if (parts.some((p: string) => isAllSchoolServer(p) || normalizeServerClassName(p) === cleanNorm)) return true;
+      }
+      return false;
+    });
   }
   if (studentId) {
     homeworks = homeworks.filter(h => 
@@ -1194,6 +1270,12 @@ app.delete('/api/homeworks/:id', async (req, res) => {
   res.json({ success: true, message: 'Ödev silindi' });
 });
 
+app.get('/api/submissions', async (req, res) => {
+  const store = inMemoryLatestState;
+  const submissions = store?.submissions || [];
+  res.json({ success: true, submissions });
+});
+
 app.get('/api/homeworks/:id/submissions', async (req, res) => {
   const { id } = req.params;
   const store = inMemoryLatestState;
@@ -1241,7 +1323,36 @@ app.post('/api/homeworks/:id/submissions/status', async (req, res) => {
   const { client } = getSupabaseInfo();
   if (client && sub.studentId) {
     try {
-      await client.from('assignment_submissions').upsert({
+      // 1. Ensure assignment exists in Supabase
+      const hw = inMemoryLatestState.homeworks?.find((h: any) => h.id === id);
+      if (hw) {
+        try {
+          await client.from('assignments').upsert({
+            id: toValidUuid(hw.id),
+            title: hw.title || 'Ödev',
+            subject: hw.subject || 'Ders',
+            description: hw.description || '',
+            created_at: hw.createdAt || nowIso,
+            updated_at: nowIso
+          }, { onConflict: 'id' });
+        } catch (err: any) {
+          console.warn('[Supabase Homework Upsert Warn]:', err?.message);
+        }
+      }
+
+      // 2. Ensure student exists in Supabase
+      const st = inMemoryLatestState.users?.find((u: any) => u.uid === sub.studentId);
+      try {
+        await client.from('students').upsert({
+          id: toValidUuid(sub.studentId),
+          full_name: sub.studentName || st?.displayName || 'Öğrenci',
+          school_number: sub.schoolNumber || st?.schoolNumber || null,
+          updated_at: nowIso
+        }, { onConflict: 'id' });
+      } catch {}
+
+      // 3. Upsert submission
+      const subResult = await client.from('assignment_submissions').upsert({
         id: toValidUuid(sub.id),
         assignment_id: toValidUuid(id),
         student_id: toValidUuid(sub.studentId),
@@ -1252,13 +1363,36 @@ app.post('/api/homeworks/:id/submissions/status', async (req, res) => {
         updated_at: nowIso
       }, { onConflict: 'id' });
 
-      await client.from('school_backups').insert({
-        backup_type: 'submission_status',
-        stats: { totalSubmissions: inMemoryLatestState.submissions.length },
-        payload: inMemoryLatestState,
-        created_at: nowIso
+      if (subResult.error) {
+        console.error('[Supabase Submissions Status Error]:', subResult.error.message);
+        recordSystemError({
+          message: `Supabase ödev değerlendirme yazma hatası: ${subResult.error.message}`,
+          category: 'database',
+          severity: 'error',
+          source: 'POST /api/homeworks/:id/submissions/status',
+          metadata: { homeworkId: id, studentId: sub.studentId, error: subResult.error }
+        });
+      }
+
+      try {
+        await client.from('school_backups').insert({
+          backup_type: 'submission_status',
+          stats: { totalSubmissions: inMemoryLatestState.submissions.length },
+          payload: inMemoryLatestState,
+          created_at: nowIso
+        });
+      } catch {}
+    } catch (err: any) {
+      console.error('[Supabase Submission Status Exception]:', err);
+      recordSystemError({
+        message: `Ödev durumu güncellenirken istisna: ${err?.message || err}`,
+        category: 'database',
+        severity: 'warn',
+        source: 'POST /api/homeworks/:id/submissions/status',
+        stack: err?.stack,
+        metadata: { homeworkId: id, studentId: sub.studentId }
       });
-    } catch {}
+    }
   }
 
   savePersistedState(inMemoryLatestState);
@@ -1270,6 +1404,17 @@ app.post('/api/homeworks/:id/submit', async (req, res) => {
   const { id } = req.params;
   const { studentId, studentNote, attachments, studentName, schoolNumber, classGrade } = req.body;
 
+  if (!studentId) {
+    recordSystemError({
+      message: 'Ödev tesliminde eksik kimlik doğrulama: studentId parametresi boş gönderildi.',
+      category: 'auth',
+      severity: 'error',
+      source: 'POST /api/homeworks/:id/submit',
+      metadata: { homeworkId: id, body: req.body }
+    });
+    return res.status(400).json({ success: false, message: 'Öğrenci kimlik bilgisi (studentId) zorunludur.' });
+  }
+
   if (!inMemoryLatestState) {
     inMemoryLatestState = { users: [], classes: [], homeworks: [], submissions: [], grades: [], attendance: [], announcements: [] };
   }
@@ -1278,12 +1423,22 @@ app.post('/api/homeworks/:id/submit', async (req, res) => {
   let sub = inMemoryLatestState.submissions.find((s: any) => s.homeworkId === id && s.studentId === studentId);
   const nowIso = new Date().toISOString();
 
+  // Sanitize attachments to prevent oversized payloads or invalid structure
+  const safeAttachments = Array.isArray(attachments) ? attachments.map((att: any) => ({
+    id: att.id || `att-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    name: att.name || 'Dokuman',
+    size: att.size || 'Belirtilmedi',
+    type: att.type || 'file',
+    url: typeof att.url === 'string' && att.url.length > 500000 ? '#' : (att.url || '#'),
+    uploadedAt: att.uploadedAt || nowIso
+  })) : [];
+
   if (sub) {
     sub.status = 'completed';
     sub.submittedAt = nowIso;
     sub.studentNote = studentNote || sub.studentNote;
-    if (attachments && attachments.length > 0) {
-      sub.attachments = [...(sub.attachments || []), ...attachments];
+    if (safeAttachments.length > 0) {
+      sub.attachments = [...(sub.attachments || []), ...safeAttachments];
     }
   } else {
     sub = {
@@ -1295,34 +1450,100 @@ app.post('/api/homeworks/:id/submit', async (req, res) => {
       classGrade: classGrade || '',
       status: 'completed',
       submittedAt: nowIso,
-      studentNote,
-      attachments: attachments || []
+      studentNote: studentNote || '',
+      attachments: safeAttachments
     };
     inMemoryLatestState.submissions.push(sub);
   }
 
-  // Supabase update
+  // Supabase update with foreign key validation
   const { client } = getSupabaseInfo();
   if (client && studentId) {
     try {
-      await client.from('assignment_submissions').upsert({
+      // 1. Ensure target assignment row exists in Supabase
+      const hw = inMemoryLatestState.homeworks?.find((h: any) => h.id === id);
+      if (hw) {
+        try {
+          await client.from('assignments').upsert({
+            id: toValidUuid(hw.id),
+            title: hw.title || 'Ödev',
+            subject: hw.subject || 'Ders',
+            description: hw.description || '',
+            created_at: hw.createdAt || nowIso,
+            updated_at: nowIso
+          }, { onConflict: 'id' });
+        } catch (err: any) {
+          console.warn('[Supabase Homework Upsert Warn]:', err?.message);
+        }
+      }
+
+      // 2. Ensure target student row exists in Supabase
+      const st = inMemoryLatestState.users?.find((u: any) => u.uid === studentId);
+      try {
+        await client.from('students').upsert({
+          id: toValidUuid(studentId),
+          full_name: studentName || st?.displayName || 'Öğrenci',
+          school_number: schoolNumber || st?.schoolNumber || null,
+          updated_at: nowIso
+        }, { onConflict: 'id' });
+      } catch {}
+
+      try {
+        await client.from('profiles').upsert({
+          id: toValidUuid(studentId),
+          full_name: studentName || st?.displayName || 'Öğrenci',
+          role: 'student',
+          school_number: schoolNumber || st?.schoolNumber || null,
+          class_name: classGrade || st?.classGrade || null,
+          updated_at: nowIso
+        }, { onConflict: 'id' });
+      } catch {}
+
+      // 3. Upsert submission with multiple column name fallbacks
+      const subResult = await client.from('assignment_submissions').upsert({
         id: toValidUuid(sub.id),
         assignment_id: toValidUuid(id),
         student_id: toValidUuid(studentId),
         status: 'completed',
         submitted_at: nowIso,
         student_note: studentNote || null,
+        notes: studentNote || null,
         attachments: sub.attachments || [],
         updated_at: nowIso
       }, { onConflict: 'id' });
 
-      await client.from('school_backups').insert({
-        backup_type: 'submission_submit',
-        stats: { totalSubmissions: inMemoryLatestState.submissions.length },
-        payload: inMemoryLatestState,
-        created_at: nowIso
+      if (subResult.error) {
+        console.error('[Supabase Submissions Error]:', subResult.error.message);
+        recordSystemError({
+          message: `Supabase ödev teslim yazma hatası: ${subResult.error.message}`,
+          category: 'database',
+          severity: 'error',
+          source: 'POST /api/homeworks/:id/submit',
+          userId: studentId,
+          metadata: { homeworkId: id, studentId, error: subResult.error }
+        });
+      }
+
+      try {
+        await client.from('school_backups').insert({
+          backup_type: 'submission_submit',
+          stats: { totalSubmissions: inMemoryLatestState.submissions.length },
+          payload: inMemoryLatestState,
+          created_at: nowIso
+        });
+      } catch {}
+    } catch (dbErr: any) {
+      console.error('[Supabase Submission Exception]:', dbErr);
+      recordSystemError({
+        message: `Ödev tesliminde veritabanı yazma istisnası: ${dbErr?.message || dbErr}`,
+        category: 'database',
+        severity: 'error',
+        source: 'POST /api/homeworks/:id/submit',
+        userId: studentId,
+        stack: dbErr?.stack,
+        metadata: { homeworkId: id, studentId }
       });
-    } catch {}
+    }
   }
 
   savePersistedState(inMemoryLatestState);
@@ -1424,6 +1645,38 @@ app.post('/api/announcements/:id/pin', async (req, res) => {
   res.status(404).json({ success: false, message: 'Duyuru bulunamadı' });
 });
 
+// ================= SYSTEM ERROR MONITORING ENDPOINTS =================
+app.get('/api/system-logs', (req, res) => {
+  res.json({ success: true, logs: inMemorySystemLogs });
+});
+
+app.post('/api/system-logs', (req, res) => {
+  const body = req.body;
+  if (!body || !body.message) {
+    return res.status(400).json({ success: false, message: 'Hata mesajı gereklidir' });
+  }
+
+  const log = recordSystemError({
+    message: body.message,
+    category: body.category,
+    severity: body.severity,
+    source: body.source,
+    stack: body.stack,
+    userId: body.userId,
+    userRole: body.userRole,
+    path: body.path,
+    metadata: body.metadata
+  });
+
+  res.json({ success: true, log });
+});
+
+app.delete('/api/system-logs', (req, res) => {
+  inMemorySystemLogs = [];
+  saveSystemLogs(inMemorySystemLogs);
+  res.json({ success: true, message: 'Tüm sistem hata logları temizlendi' });
+});
+
 app.all('/api/*', (req, res) => {
   res.status(404).json({
     error: `API uç noktası bulunamadı: ${req.method} ${req.path}`,
@@ -1434,6 +1687,13 @@ app.all('/api/*', (req, res) => {
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (req.path.startsWith('/api')) {
     console.error('[Server API Error Handler]:', err);
+    recordSystemError({
+      message: `API Hatası: ${req.method} ${req.path} -> ${err?.message || 'Bilinmeyen hata'}`,
+      category: req.path.includes('homework') ? 'homework' : 'runtime',
+      severity: 'error',
+      source: `${req.method} ${req.path}`,
+      stack: err?.stack
+    });
     return res.status(500).json({
       error: err?.message || 'Sunucu içi API hatası oluştu.',
       status: 'error'

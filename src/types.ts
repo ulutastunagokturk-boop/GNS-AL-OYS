@@ -427,4 +427,23 @@ export interface SupabaseSyncResponse {
   error?: string;
 }
 
+// ================= SYSTEM ERROR MONITORING =================
+export type ErrorSeverity = 'error' | 'warn' | 'info';
+export type ErrorCategory = 'homework' | 'database' | 'network' | 'auth' | 'runtime' | 'system';
+
+export interface SystemErrorLog {
+  id: string;
+  timestamp: string; // ISO string
+  message: string;
+  category: ErrorCategory;
+  severity: ErrorSeverity;
+  source?: string;
+  stack?: string;
+  userId?: string;
+  userRole?: string;
+  path?: string;
+  resolved?: boolean;
+  metadata?: Record<string, any>;
+}
+
 

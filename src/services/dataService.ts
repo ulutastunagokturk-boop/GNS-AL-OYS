@@ -57,6 +57,7 @@ import { generateDefaultSchedule } from './scheduleData';
 import { generateUniqueStudentPassword } from '../utils/passwordGenerator';
 import { supabaseBackupService } from './supabaseService';
 import { fixTurkishMojibake, normalizeTurkishClassName } from '../utils/excelTurkishUtils';
+import { errorMonitoringService } from './errorMonitoringService';
 
 export enum OperationType {
   CREATE = 'create',
@@ -114,11 +115,16 @@ export function sanitizeForFirestore<T>(data: T): T {
 }
 
 /**
- * Normalizes class names across formats: '9/D', '9-D', '9 d' -> '9-D'
+ * Normalizes class names across formats: '9/D', '9-D', '9 d', '9D', '9d' -> '9-D'
  */
 export function normalizeClassName(className?: string): string {
   if (!className) return '';
-  return className.trim().toUpperCase().replace(/[\/\\]/g, '-').replace(/\s+/g, '-');
+  const trimmed = className.trim();
+  const match = trimmed.match(/^(\d{1,2})\s*[\-_/]?\s*([a-zA-ZçğıöşüÇĞİÖŞÜ])$/);
+  if (match) {
+    return `${match[1]}-${match[2].toLocaleUpperCase('tr-TR')}`;
+  }
+  return trimmed.toLocaleUpperCase('tr-TR').replace(/[\/\\]/g, '-').replace(/\s+/g, '-');
 }
 
 /**
@@ -127,7 +133,7 @@ export function normalizeClassName(className?: string): string {
 export function isAllSchool(str?: string): boolean {
   if (!str) return false;
   const s = str.trim().toLowerCase().replace(/[\s\-_/]/g, '');
-  return s === 'tumokul' || s === 'tümokul' || s === 'all' || s === 'herkes' || s === 'tum' || s === 'tüm';
+  return s === 'tumokul' || s === 'tümokul' || s === 'all' || s === 'herkes' || s === 'tum' || s === 'tüm' || s.includes('tumokul') || s.includes('tümokul') || s.includes('herkes');
 }
 
 const CACHE_STORAGE_KEY = 'gnisal_oys_v13_clean_slate';
@@ -580,20 +586,40 @@ class DataService {
       this.notifySubscribers();
     }
 
-    // 4. Fetch submissions from Firestore
+    // 4. Fetch submissions from Server API (/api/submissions) and Firestore
+    let remoteSubmissions: HomeworkSubmission[] = [];
+    try {
+      const subRes = await fetch('/api/submissions');
+      if (subRes.ok) {
+        const subJson = await subRes.json();
+        if (subJson.success && Array.isArray(subJson.submissions) && subJson.submissions.length > 0) {
+          remoteSubmissions = subJson.submissions;
+        }
+      }
+    } catch (e) {
+      console.warn('[DataService] /api/submissions sync note:', e);
+    }
+
     try {
       const subSnap = await getDocs(collection(db, 'homework_submissions'));
       if (!subSnap.empty) {
-        const list: HomeworkSubmission[] = [];
-        subSnap.forEach(d => list.push({ id: d.id, ...d.data() } as HomeworkSubmission));
+        const firestoreSubs: HomeworkSubmission[] = [];
+        subSnap.forEach(d => firestoreSubs.push({ id: d.id, ...d.data() } as HomeworkSubmission));
         const subMap = new Map<string, HomeworkSubmission>();
-        (this.cache.submissions || []).forEach(s => subMap.set(s.id, s));
-        list.forEach(s => subMap.set(s.id, s));
-        this.cache.submissions = Array.from(subMap.values());
-        this.saveCache(this.cache, false);
-        this.notifySubscribers();
+        remoteSubmissions.forEach(s => subMap.set(s.id, s));
+        firestoreSubs.forEach(s => subMap.set(s.id, s));
+        remoteSubmissions = Array.from(subMap.values());
       }
     } catch {}
+
+    if (remoteSubmissions.length > 0) {
+      const subMap = new Map<string, HomeworkSubmission>();
+      (this.cache.submissions || []).forEach(s => subMap.set(s.id, s));
+      remoteSubmissions.forEach(s => subMap.set(s.id, s));
+      this.cache.submissions = Array.from(subMap.values());
+      this.saveCache(this.cache, false);
+      this.notifySubscribers();
+    }
 
     return this.cache.homeworks;
   }
@@ -2658,20 +2684,21 @@ class DataService {
         return hw.targetStudentIds?.includes(studentId);
       }
 
-      // 2. All School
-      if (hw.targetClass === 'Tüm Okul' || normalizeClassName(hw.targetClass) === 'TÜMOKUL') return true;
-      if (hw.targetClasses && hw.targetClasses.some(c => c === 'Tüm Okul' || normalizeClassName(c) === 'TÜMOKUL')) return true;
+      // 2. All School target (always visible to all students)
+      if (isAllSchool(hw.targetClass)) return true;
+      if (hw.targetClasses && hw.targetClasses.some(c => isAllSchool(c))) return true;
 
-      // 3. If assigned to multiple classes
-      if (hw.targetClasses && hw.targetClasses.length > 0) {
-        if (!cleanNorm) return false;
-        return hw.targetClasses.some(c => c === 'Tüm Okul' || normalizeClassName(c) === 'TÜMOKUL' || normalizeClassName(c) === cleanNorm);
-      }
-
-      // 4. Single Class or Comma-separated match
-      if (cleanNorm && hw.targetClass) {
-        const parts = hw.targetClass.split(',').map(c => normalizeClassName(c.trim()));
-        if (parts.includes(cleanNorm) || parts.includes('TÜMOKUL')) return true;
+      // 3. If student has a classGrade, check matching classes
+      if (cleanNorm) {
+        if (hw.targetClasses && hw.targetClasses.some(c => isAllSchool(c) || normalizeClassName(c) === cleanNorm)) {
+          return true;
+        }
+        if (hw.targetClass) {
+          const parts = hw.targetClass.split(',').map(c => c.trim());
+          if (parts.some(p => isAllSchool(p) || normalizeClassName(p) === cleanNorm)) {
+            return true;
+          }
+        }
       }
 
       return false;
@@ -2687,16 +2714,23 @@ class DataService {
     
     // Determine target students
     let targetStudents: UserProfile[] = [];
+    const allStudents = this.getStudents();
     if (homework.targetType === 'student' && homework.targetStudentIds && homework.targetStudentIds.length > 0) {
-      targetStudents = this.getStudents().filter(st => homework.targetStudentIds?.includes(st.uid));
+      targetStudents = allStudents.filter(st => homework.targetStudentIds?.includes(st.uid));
+    } else if (isAllSchool(homework.targetClass) || (homework.targetClasses && homework.targetClasses.some(tc => isAllSchool(tc)))) {
+      targetStudents = allStudents;
     } else if (homework.targetClasses && homework.targetClasses.length > 0) {
-      targetStudents = this.getStudents().filter(st => 
-        st.classGrade && homework.targetClasses?.some(tc => tc === 'Tüm Okul' || normalizeClassName(tc) === normalizeClassName(st.classGrade))
+      const normTargets = homework.targetClasses.map(tc => normalizeClassName(tc));
+      targetStudents = allStudents.filter(st => 
+        st.classGrade && normTargets.includes(normalizeClassName(st.classGrade))
       );
-    } else if (homework.targetClass === 'Tüm Okul') {
-      targetStudents = this.getStudents();
+    } else if (homework.targetClass) {
+      const parts = homework.targetClass.split(',').map(c => normalizeClassName(c.trim()));
+      targetStudents = allStudents.filter(st => 
+        st.classGrade && parts.includes(normalizeClassName(st.classGrade))
+      );
     } else {
-      targetStudents = this.getStudentsByClass(homework.targetClass);
+      targetStudents = allStudents;
     }
 
     const newSubmissions: HomeworkSubmission[] = targetStudents.map(st => ({
@@ -2811,21 +2845,23 @@ class DataService {
     
     if (homework) {
       let targetStudents: UserProfile[] = [];
+      const allStudents = this.getStudents();
       if (homework.targetType === 'student' && homework.targetStudentIds && homework.targetStudentIds.length > 0) {
-        targetStudents = this.getStudents().filter(st => homework.targetStudentIds?.includes(st.uid));
+        targetStudents = allStudents.filter(st => homework.targetStudentIds?.includes(st.uid));
+      } else if (isAllSchool(homework.targetClass) || (homework.targetClasses && homework.targetClasses.some(tc => isAllSchool(tc)))) {
+        targetStudents = allStudents;
       } else if (homework.targetClasses && homework.targetClasses.length > 0) {
-        targetStudents = this.getStudents().filter(st => 
-          st.classGrade && homework.targetClasses?.some(tc => tc === 'Tüm Okul' || normalizeClassName(tc) === 'TÜMOKUL' || normalizeClassName(tc) === normalizeClassName(st.classGrade))
+        const normTargets = homework.targetClasses.map(tc => normalizeClassName(tc));
+        targetStudents = allStudents.filter(st => 
+          st.classGrade && normTargets.includes(normalizeClassName(st.classGrade))
         );
-      } else if (homework.targetClass === 'Tüm Okul' || normalizeClassName(homework.targetClass) === 'TÜMOKUL') {
-        targetStudents = this.getStudents();
       } else if (homework.targetClass) {
         const parts = homework.targetClass.split(',').map(c => normalizeClassName(c.trim()));
-        targetStudents = this.getStudents().filter(st =>
-          st.classGrade && (parts.includes('TÜMOKUL') || parts.includes(normalizeClassName(st.classGrade)))
+        targetStudents = allStudents.filter(st =>
+          st.classGrade && parts.includes(normalizeClassName(st.classGrade))
         );
       } else {
-        targetStudents = this.getStudents();
+        targetStudents = allStudents;
       }
 
       let cacheChanged = false;
@@ -3001,12 +3037,89 @@ class DataService {
 
   // Student self-submission
   public async submitHomework(homeworkId: string, studentId: string, note?: string, attachments?: Attachment[]): Promise<void> {
-    const existing = this.cache.submissions.find(s => s.homeworkId === homeworkId && s.studentId === studentId);
-    if (existing) {
-      existing.attachments = attachments || existing.attachments;
-      existing.submissionNote = note || existing.submissionNote;
+    const subIndex = this.cache.submissions.findIndex(s => s.homeworkId === homeworkId && s.studentId === studentId);
+    let updatedSubs = [...this.cache.submissions];
+    const hw = this.cache.homeworks.find(h => h.id === homeworkId);
+    const nowIso = new Date().toISOString();
+
+    if (subIndex >= 0) {
+      updatedSubs[subIndex] = {
+        ...updatedSubs[subIndex],
+        status: 'completed',
+        submissionNote: note !== undefined ? note : updatedSubs[subIndex].submissionNote,
+        attachments: attachments !== undefined ? attachments : updatedSubs[subIndex].attachments,
+        submittedAt: updatedSubs[subIndex].submittedAt || nowIso,
+        updatedAt: nowIso
+      };
+    } else {
+      const student = this.getUserById(studentId);
+      updatedSubs.push({
+        id: `sub-${homeworkId}-${studentId}`,
+        homeworkId,
+        studentId,
+        studentName: student?.displayName || 'Öğrenci',
+        studentNumber: student?.schoolNumber || '',
+        studentClass: student?.classGrade || hw?.targetClass || '',
+        status: 'completed',
+        submissionNote: note,
+        attachments: attachments || [],
+        submittedAt: nowIso,
+        updatedAt: nowIso
+      });
     }
-    return this.updateSubmissionStatus(homeworkId, studentId, 'completed', undefined, note, undefined, 'Öğrenci');
+
+    // Auto Gamification & Badge Trigger on Homework Completion
+    const xpToAdd = hw?.xpReward || 50;
+    await this.awardXpToStudent(studentId, xpToAdd, `${hw?.title || 'Ödev'} tamamlama ödülü`);
+
+    const existingBadge = this.cache.studentBadges.find(sb => sb.studentId === studentId && sb.badgeId === 'badge-on-time');
+    if (!existingBadge) {
+      await this.awardBadgeToStudent(studentId, 'badge-on-time', 'Sistem', `${hw?.title || 'Ödev'} zamanında teslim edildi.`);
+    }
+
+    const studentCompletedCount = updatedSubs.filter(s => s.studentId === studentId && s.status === 'completed').length;
+    if (studentCompletedCount >= 5) {
+      const champBadge = this.cache.studentBadges.find(sb => sb.studentId === studentId && sb.badgeId === 'badge-homework-champion');
+      if (!champBadge) {
+        await this.awardBadgeToStudent(studentId, 'badge-homework-champion', 'Sistem', '5 ödevi başarıyla tamamlama başarısı');
+      }
+    }
+
+    this.saveCache({ 
+      ...this.cache, 
+      submissions: updatedSubs
+    });
+
+    try {
+      // Ensure attachments don't exceed Firestore 1MB limits
+      const sanitizedAttachments = attachments ? attachments.map(a => ({
+        id: a.id || `att-${Date.now()}`,
+        name: a.name || 'Belge',
+        size: a.size || 'Belirtilmedi',
+        type: a.type || 'file',
+        url: typeof a.url === 'string' && a.url.length > 500000 ? '#' : (a.url || '#'),
+        uploadedAt: a.uploadedAt || nowIso
+      })) : [];
+
+      await setDoc(doc(db, 'homework_submissions', `sub-${homeworkId}-${studentId}`), sanitizeForFirestore({
+        homeworkId,
+        studentId,
+        status: 'completed',
+        submissionNote: note || null,
+        attachments: sanitizedAttachments,
+        submittedAt: nowIso,
+        updatedAt: nowIso
+      }), { merge: true });
+    } catch (e: any) {
+      console.warn('[DataService] Firestore ödev teslim hatası:', e);
+      errorMonitoringService.captureLog({
+        message: `Firestore ödev teslim yazma hatası: ${e?.message || e}`,
+        category: 'database',
+        severity: 'warn',
+        source: 'dataService.submitHomework',
+        metadata: { homeworkId, studentId }
+      });
+    }
   }
 
   // ================= GRADES (SINAV VE DENEME NOTLARI) =================
@@ -3197,13 +3310,13 @@ class DataService {
       if (a.targetAudience === 'teachers') return false;
       if (a.targetAudience === 'all' || a.targetAudience === 'students' || !a.targetAudience) return true;
       if (a.targetAudience === 'class') {
-        if (a.targetClass === 'Tüm Okul' || normalizeClassName(a.targetClass) === 'TÜMOKUL') return true;
-        if (a.targetClasses && a.targetClasses.some(c => c === 'Tüm Okul' || normalizeClassName(c) === 'TÜMOKUL')) return true;
+        if (isAllSchool(a.targetClass)) return true;
+        if (a.targetClasses && a.targetClasses.some(c => isAllSchool(c))) return true;
         if (!cleanNorm) return false;
-        if (a.targetClasses && a.targetClasses.some(c => normalizeClassName(c) === cleanNorm)) return true;
+        if (a.targetClasses && a.targetClasses.some(c => isAllSchool(c) || normalizeClassName(c) === cleanNorm)) return true;
         if (a.targetClass) {
-          const parts = a.targetClass.split(',').map(c => normalizeClassName(c.trim()));
-          if (parts.includes(cleanNorm) || parts.includes('TÜMOKUL')) return true;
+          const parts = a.targetClass.split(',').map(c => c.trim());
+          if (parts.some(p => isAllSchool(p) || normalizeClassName(p) === cleanNorm)) return true;
         }
       }
       return false;
@@ -3218,13 +3331,13 @@ class DataService {
       if (a.targetAudience === 'teachers') return false;
       if (a.targetAudience === 'all' || a.targetAudience === 'students' || !a.targetAudience) return true;
       if (a.targetAudience === 'class') {
-        if (a.targetClass === 'Tüm Okul' || normalizeClassName(a.targetClass) === 'TÜMOKUL') return true;
-        if (a.targetClasses && a.targetClasses.some(c => c === 'Tüm Okul' || normalizeClassName(c) === 'TÜMOKUL')) return true;
+        if (isAllSchool(a.targetClass)) return true;
+        if (a.targetClasses && a.targetClasses.some(c => isAllSchool(c))) return true;
         if (normalizedClasses.length === 0) return false;
-        if (a.targetClasses && a.targetClasses.some(c => normalizedClasses.includes(normalizeClassName(c)))) return true;
+        if (a.targetClasses && a.targetClasses.some(c => isAllSchool(c) || normalizedClasses.includes(normalizeClassName(c)))) return true;
         if (a.targetClass) {
-          const parts = a.targetClass.split(',').map(c => normalizeClassName(c.trim()));
-          if (parts.some(p => normalizedClasses.includes(p) || p === 'TÜMOKUL')) return true;
+          const parts = a.targetClass.split(',').map(c => c.trim());
+          if (parts.some(p => isAllSchool(p) || normalizedClasses.includes(normalizeClassName(p)))) return true;
         }
       }
       return false;
