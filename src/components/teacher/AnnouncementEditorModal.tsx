@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
-import { Announcement, AnnouncementPriority, TargetAudience, Attachment, SchoolClass } from '../../types';
+import { Announcement, AnnouncementPriority, TargetAudience, SchoolClass } from '../../types';
 import { RichTextRenderer } from '../common/RichTextRenderer';
 import {
   Megaphone,
@@ -21,27 +21,18 @@ import {
   AlertTriangle,
   Table,
   Link,
-  Link2,
   Pin,
   Sparkles,
   Eye,
   Edit3,
   Columns,
   CheckCircle2,
-  Paperclip,
-  Plus,
-  Trash2,
   Tag,
   Info,
   Calendar,
   Layers,
-  School,
-  Globe,
   FileText,
-  ExternalLink,
-  HardDrive,
-  FolderOpen,
-  Cloud
+  School
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -192,14 +183,6 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Attachments & Resource Links
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [attachName, setAttachName] = useState('');
-  const [attachUrl, setAttachUrl] = useState('');
-  const [attachType, setAttachType] = useState<'link' | 'pdf' | 'doc' | 'image' | 'archive'>('link');
-  const [attachCategory, setAttachCategory] = useState<'general' | 'drive' | 'meb' | 'pdf' | 'school'>('general');
-  const [showAttachForm, setShowAttachForm] = useState(false);
-
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Initialize data on open / edit
@@ -227,7 +210,6 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
 
       setPinned(!!announcementToEdit.pinned);
       setTags(announcementToEdit.tags || []);
-      setAttachments(announcementToEdit.attachments || []);
     } else {
       setTitle('');
       setContent('');
@@ -236,12 +218,7 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
       setSelectedClasses(freshClasses.length > 0 ? [freshClasses[0].name] : ['9-D']);
       setPinned(false);
       setTags(['Duyuru']);
-      setAttachments([]);
       setViewMode('edit');
-      setAttachName('');
-      setAttachUrl('');
-      setAttachCategory('general');
-      setShowAttachForm(false);
     }
   }, [announcementToEdit, isOpen]);
 
@@ -312,79 +289,6 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
     }
   };
 
-  const handleAddAttachment = (customName?: string, customUrl?: string, customType?: 'link' | 'pdf' | 'doc' | 'image' | 'archive') => {
-    const rawUrl = (customUrl || attachUrl).trim();
-    if (!rawUrl) return;
-
-    // Ensure valid URL prefix
-    const formattedUrl = (rawUrl.startsWith('http://') || rawUrl.startsWith('https://'))
-      ? rawUrl
-      : `https://${rawUrl}`;
-
-    let autoName = (customName || attachName).trim();
-    if (!autoName) {
-      if (formattedUrl.includes('drive.google.com')) autoName = 'Google Drive Doküman Klasörü';
-      else if (formattedUrl.includes('ogmmateryal.eba.gov.tr') || formattedUrl.includes('eba.gov.tr')) autoName = 'MEB / EBA Eğitim Materyali';
-      else if (formattedUrl.includes('meb.gov.tr')) autoName = 'MEB Resmi Dokümanı / Kılavuzu';
-      else if (formattedUrl.toLowerCase().endsWith('.pdf')) autoName = 'Ders / Sınav PDF Dokümanı';
-      else {
-        try {
-          const parsed = new URL(formattedUrl);
-          autoName = `${parsed.hostname} Referans Kaynağı`;
-        } catch {
-          autoName = 'Harici Kaynak Bağlantısı';
-        }
-      }
-    }
-
-    let detectedType: 'link' | 'pdf' | 'doc' | 'image' | 'archive' = customType || attachType;
-    if (formattedUrl.toLowerCase().endsWith('.pdf')) detectedType = 'pdf';
-    else if (formattedUrl.toLowerCase().endsWith('.docx') || formattedUrl.toLowerCase().endsWith('.doc')) detectedType = 'doc';
-    else if (formattedUrl.toLowerCase().endsWith('.zip') || formattedUrl.toLowerCase().endsWith('.rar')) detectedType = 'archive';
-
-    const newAtt: Attachment = {
-      id: `att-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-      name: autoName,
-      url: formattedUrl,
-      type: detectedType,
-      uploadedAt: new Date().toISOString()
-    };
-
-    setAttachments(prev => [...prev, newAtt]);
-    setAttachName('');
-    setAttachUrl('');
-    setAttachCategory('general');
-  };
-
-  const handleApplyResourcePreset = (presetType: 'drive' | 'meb' | 'pdf' | 'school') => {
-    if (presetType === 'drive') {
-      setAttachName('Google Drive - Ders Materyalleri Klasörü');
-      setAttachUrl('https://drive.google.com/');
-      setAttachCategory('drive');
-      setAttachType('link');
-    } else if (presetType === 'meb') {
-      setAttachName('MEB / EBA - OGM Materyal Soru & Ders Kaynakları');
-      setAttachUrl('https://ogmmateryal.eba.gov.tr/');
-      setAttachCategory('meb');
-      setAttachType('link');
-    } else if (presetType === 'pdf') {
-      setAttachName('Ders Notları & Çalışma Fasikülü (PDF)');
-      setAttachUrl('https://example.com/calisma-fasikulu.pdf');
-      setAttachCategory('pdf');
-      setAttachType('pdf');
-    } else if (presetType === 'school') {
-      setAttachName('Okul Resmi Web Portalı & Duyuru Linki');
-      setAttachUrl('https://okul.meb.k12.tr/');
-      setAttachCategory('school');
-      setAttachType('link');
-    }
-    setShowAttachForm(true);
-  };
-
-  const handleRemoveAttachment = (id: string) => {
-    setAttachments(attachments.filter(a => a.id !== id));
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
@@ -414,7 +318,7 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
           targetClasses: targetClassesArr,
           pinned,
           tags,
-          attachments
+          attachments: []
         });
         if (onSaved) {
           onSaved({
@@ -427,7 +331,7 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
             targetClasses: targetClassesArr,
             pinned,
             tags,
-            attachments
+            attachments: []
           });
         }
       } else {
@@ -444,7 +348,7 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
           priority,
           pinned,
           tags,
-          attachments,
+          attachments: [],
           createdAt: new Date().toISOString(),
           viewsCount: 1
         };
@@ -943,192 +847,8 @@ export const AnnouncementEditorModal: React.FC<AnnouncementEditorModalProps> = (
             </div>
           </div>
 
-          {/* Tags & Resources / Attachments Section */}
+          {/* Tags Section */}
           <div className="space-y-4">
-            
-            {/* Dedicated Dosya / Bağlantı Linki (Okul & Harici Doküman Kaynakları) */}
-            <div className="bg-slate-50/90 dark:bg-slate-800/60 p-4 sm:p-5 rounded-3xl border border-purple-200/80 dark:border-purple-900/50 shadow-xs space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <label className="text-xs sm:text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
-                    <span className="p-1.5 rounded-xl bg-purple-600 text-white shadow-xs">
-                      <Link2 className="w-4 h-4" />
-                    </span>
-                    Dosya / Bağlantı Linki (Okul Kaynakları & Harici Dokümanlar)
-                    {attachments.length > 0 && (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300">
-                        {attachments.length} Ek Bağlantı
-                      </span>
-                    )}
-                  </label>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                    Öğretmenler okul kaynakları, Google Drive, MEB/EBA eğitim portalları veya harici PDF/belgelere doğrudan bağlantı referansı verebilir.
-                  </p>
-                </div>
-
-                {/* Quick Preset Buttons */}
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1 hidden sm:inline">Hızlı Kaynak:</span>
-                  <button
-                    type="button"
-                    onClick={() => handleApplyResourcePreset('drive')}
-                    className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:border-blue-400 hover:text-blue-600 text-slate-700 dark:text-slate-300 flex items-center gap-1 transition cursor-pointer shadow-2xs"
-                    title="Google Drive Klasörü / Dokümanı Bağla"
-                  >
-                    <HardDrive className="w-3 h-3 text-blue-500" /> Drive
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleApplyResourcePreset('meb')}
-                    className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:border-rose-400 hover:text-rose-600 text-slate-700 dark:text-slate-300 flex items-center gap-1 transition cursor-pointer shadow-2xs"
-                    title="MEB / EBA / OGM Materyal Kaynağı Bağla"
-                  >
-                    <Globe className="w-3 h-3 text-rose-500" /> MEB / EBA
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleApplyResourcePreset('pdf')}
-                    className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:border-amber-400 hover:text-amber-600 text-slate-700 dark:text-slate-300 flex items-center gap-1 transition cursor-pointer shadow-2xs"
-                    title="PDF Çalışma Notu veya Sınav Dokümanı"
-                  >
-                    <FileText className="w-3 h-3 text-amber-500" /> PDF Belgesi
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleApplyResourcePreset('school')}
-                    className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:border-purple-400 hover:text-purple-600 text-slate-700 dark:text-slate-300 flex items-center gap-1 transition cursor-pointer shadow-2xs"
-                    title="Okul Resmi Web Portalı"
-                  >
-                    <School className="w-3 h-3 text-purple-500" /> Okul Portalı
-                  </button>
-                </div>
-              </div>
-
-              {/* Direct Add Input Bar */}
-              <div className="p-3.5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xs space-y-2.5">
-                <div className="grid grid-cols-1 md:grid-cols-12 gap-2">
-                  <div className="md:col-span-6">
-                    <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
-                      Dosya / Bağlantı Linki (URL) *
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="url"
-                        placeholder="https://drive.google.com/... veya https://ogmmateryal.eba.gov.tr/..."
-                        value={attachUrl}
-                        onChange={(e) => setAttachUrl(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleAddAttachment();
-                          }
-                        }}
-                        className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono"
-                      />
-                      <Globe className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
-                    </div>
-                  </div>
-
-                  <div className="md:col-span-4">
-                    <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
-                      Doküman / Kaynak Başlığı
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Örn: 10-A Sınav Çalışma Fasikülü"
-                      value={attachName}
-                      onChange={(e) => setAttachName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleAddAttachment();
-                        }
-                      }}
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-
-                  <div className="md:col-span-2 flex items-end">
-                    <button
-                      type="button"
-                      onClick={() => handleAddAttachment()}
-                      disabled={!attachUrl.trim()}
-                      className="w-full py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-purple-600/20 flex items-center justify-center gap-1.5 transition cursor-pointer"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Link Ekle</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Added Reference Links List */}
-              {attachments.length > 0 && (
-                <div className="space-y-2 pt-1">
-                  <div className="text-[11px] font-black text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                    <Paperclip className="w-3.5 h-3.5 text-purple-600" />
-                    Duyuruya Eklenmiş Referans Dokümanlar ({attachments.length}):
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {attachments.map((att) => {
-                      const isDrive = att.url.includes('drive.google.com');
-                      const isMeb = att.url.includes('eba.gov.tr') || att.url.includes('meb.gov.tr');
-                      const isPdf = att.url.toLowerCase().endsWith('.pdf') || att.type === 'pdf';
-
-                      return (
-                        <div
-                          key={att.id}
-                          className="flex items-center justify-between p-2.5 px-3 bg-white dark:bg-slate-900 rounded-2xl text-xs border border-purple-100 dark:border-purple-900/60 shadow-2xs hover:border-purple-300 transition group"
-                        >
-                          <div className="flex items-center gap-2.5 min-w-0 pr-2">
-                            <div className={`p-2 rounded-xl shrink-0 ${
-                              isDrive ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400' :
-                              isMeb ? 'bg-rose-50 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400' :
-                              isPdf ? 'bg-amber-50 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400' :
-                              'bg-purple-50 text-purple-600 dark:bg-purple-950/60 dark:text-purple-400'
-                            }`}>
-                              {isDrive ? <HardDrive className="w-4 h-4" /> :
-                               isMeb ? <Globe className="w-4 h-4" /> :
-                               isPdf ? <FileText className="w-4 h-4" /> :
-                               <Link className="w-4 h-4" />}
-                            </div>
-                            <div className="min-w-0">
-                              <div className="font-bold text-slate-900 dark:text-white truncate text-xs">
-                                {att.name}
-                              </div>
-                              <div className="text-[10px] text-slate-400 truncate font-mono">
-                                {att.url}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-1 shrink-0">
-                            <a
-                              href={att.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="p-1.5 rounded-lg text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/50 transition"
-                              title="Bağlantıyı Yeni Sekmede Test Et"
-                            >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </a>
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveAttachment(att.id)}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition cursor-pointer"
-                              title="Bağlantıyı Kaldır"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-
             {/* Tags Input Section */}
             <div className="bg-slate-50/70 dark:bg-slate-800/40 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800">
               <label className="block text-xs font-black text-slate-800 dark:text-slate-200 mb-1.5 flex items-center gap-1">

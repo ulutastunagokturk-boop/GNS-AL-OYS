@@ -25,8 +25,6 @@ import {
   FileText,
   Sliders,
   Send,
-  UploadCloud,
-  Image as ImageIcon,
   School,
   UserCheck,
   GraduationCap,
@@ -102,11 +100,6 @@ export const TeacherHomeworks: React.FC = () => {
   const [maxScore, setMaxScore] = useState(100);
   const [xpReward, setXpReward] = useState(50);
   
-  // Attachments State
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [customAttachName, setCustomAttachName] = useState('');
-  const [isUploading, setIsUploading] = useState(false);
-
   // Rubric State
   const [enableRubric, setEnableRubric] = useState(true);
   const [rubricItems, setRubricItems] = useState<RubricItem[]>([
@@ -128,7 +121,6 @@ export const TeacherHomeworks: React.FC = () => {
     setDueTime('23:59');
     setMaxScore(100);
     setXpReward(50);
-    setAttachments([]);
     setEnableRubric(true);
     setShowCreateModal(true);
   };
@@ -146,7 +138,6 @@ export const TeacherHomeworks: React.FC = () => {
     setDueTime(hw.dueTime || '23:59');
     setMaxScore(hw.maxScore || 100);
     setXpReward(hw.xpReward || 50);
-    setAttachments(hw.attachments || []);
     if (hw.rubric && hw.rubric.length > 0) {
       setRubricItems(hw.rubric);
       setEnableRubric(true);
@@ -165,49 +156,6 @@ export const TeacherHomeworks: React.FC = () => {
     if (hw.targetClass && hw.targetClass.split(',').some(tc => isAllSchool(tc) || normalizeClassName(tc.trim()) === cleanFilter)) return true;
     return false;
   });
-
-  // Handle File Upload (supports images and documents)
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    setIsUploading(true);
-    Array.from(files).forEach(file => {
-      const isImg = file.type.startsWith('image/');
-      const reader = new FileReader();
-      reader.onload = () => {
-        const resultUrl = reader.result as string;
-        const newAtt: Attachment = {
-          id: `att-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-          name: file.name,
-          url: resultUrl,
-          size: file.size > 1024 * 1024 
-            ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` 
-            : `${Math.max(1, Math.round(file.size / 1024))} KB`,
-          type: isImg ? 'image' : 'pdf',
-          uploadedAt: new Date().toISOString()
-        };
-        setAttachments(prev => [...prev, newAtt]);
-        setIsUploading(false);
-      };
-      reader.readAsDataURL(file);
-    });
-    e.target.value = '';
-  };
-
-  const handleAddAttachment = () => {
-    if (!customAttachName.trim()) return;
-    const newAtt: Attachment = {
-      id: `att-${Date.now()}`,
-      name: customAttachName.trim(),
-      url: '#',
-      size: '1.2 MB',
-      type: 'pdf',
-      uploadedAt: new Date().toISOString()
-    };
-    setAttachments([...attachments, newAtt]);
-    setCustomAttachName('');
-  };
 
   // Class Selection Helpers
   const handleToggleClass = (className: string) => {
@@ -281,7 +229,7 @@ export const TeacherHomeworks: React.FC = () => {
         dueTime: dueTime,
         maxScore: Number(maxScore) || 100,
         xpReward: Number(xpReward) || 50,
-        attachments: attachments.length > 0 ? attachments : undefined,
+        attachments: undefined,
         rubric: enableRubric && rubricItems.length > 0 ? rubricItems : undefined,
       });
     } else {
@@ -300,7 +248,7 @@ export const TeacherHomeworks: React.FC = () => {
         dueTime: dueTime,
         maxScore: Number(maxScore) || 100,
         xpReward: Number(xpReward) || 50,
-        attachments: attachments.length > 0 ? attachments : undefined,
+        attachments: undefined,
         rubric: enableRubric && rubricItems.length > 0 ? rubricItems : undefined,
         createdAt: new Date().toISOString()
       };
@@ -312,7 +260,6 @@ export const TeacherHomeworks: React.FC = () => {
     setEditingHomework(null);
     setTitle('');
     setDescription('');
-    setAttachments([]);
     setSelectedStudentIds([]);
     setSelectedClasses(['Tüm Okul']);
     
@@ -342,7 +289,7 @@ export const TeacherHomeworks: React.FC = () => {
             Ödev Yönetimi & Takip Raporu
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Sınıflara PDF/doküman ekli ve rubrik puanlama kriterli ödevler atayın; 1-tıkla değerlendirin.
+            Sınıflara ve öğrencilere yönergeleri detaylı ödevler atayın; rubrik kriterleri ile değerlendirin.
           </p>
         </div>
 
@@ -780,90 +727,6 @@ export const TeacherHomeworks: React.FC = () => {
                   required
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
-              </div>
-
-              {/* FILE & IMAGE ATTACHMENTS SECTION */}
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/60 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                    <Paperclip className="w-3.5 h-3.5 text-indigo-500" />
-                    İsteğe Bağlı Görsel veya Dosya Ekle
-                  </label>
-                  <span className="text-[11px] text-slate-400">PDF, PNG, JPG, DOCX</span>
-                </div>
-
-                {/* Upload Button + File Input */}
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <label className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-dashed border-indigo-300 dark:border-indigo-700 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100/60 transition cursor-pointer text-xs font-bold">
-                    <UploadCloud className="w-4 h-4" />
-                    <span>Cihazdan Görsel veya Belge Yükle</span>
-                    <input
-                      type="file"
-                      multiple
-                      accept="image/*,.pdf,.doc,.docx,.xlsx,.ppt,.pptx"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-                  </label>
-                </div>
-
-                {/* Or manually add filename/url */}
-                <div className="flex gap-2 pt-1">
-                  <input
-                    type="text"
-                    placeholder="Veya dosya ismi yazın (Örn: Parabol_Test_Sorulari.pdf)"
-                    value={customAttachName}
-                    onChange={(e) => setCustomAttachName(e.target.value)}
-                    className="flex-1 px-3 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleAddAttachment}
-                    className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold hover:bg-indigo-600 hover:text-white transition"
-                  >
-                    Ekle
-                  </button>
-                </div>
-
-                {/* Uploading indicator */}
-                {isUploading && (
-                  <div className="text-xs text-indigo-600 dark:text-indigo-400 animate-pulse font-medium">
-                    Dosya işleniyor...
-                  </div>
-                )}
-
-                {/* Attachment Previews */}
-                {attachments.length > 0 && (
-                  <div className="space-y-2 pt-2">
-                    <div className="text-[11px] font-bold text-slate-500">Eklenen Dosyalar ({attachments.length}):</div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {attachments.map((att, idx) => (
-                        <div key={idx} className="p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-2 text-xs">
-                          <div className="flex items-center gap-2 overflow-hidden">
-                            {att.type === 'image' && att.url && att.url.startsWith('data:') ? (
-                              <img src={att.url} alt={att.name} className="w-8 h-8 rounded-lg object-cover border shrink-0" />
-                            ) : att.type === 'image' ? (
-                              <ImageIcon className="w-4 h-4 text-emerald-500 shrink-0" />
-                            ) : (
-                              <FileText className="w-4 h-4 text-indigo-500 shrink-0" />
-                            )}
-                            <div className="truncate">
-                              <p className="font-bold text-slate-800 dark:text-slate-200 truncate">{att.name}</p>
-                              <p className="text-[10px] text-slate-400">{att.size}</p>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setAttachments(attachments.filter((_, i) => i !== idx))}
-                            className="p-1 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950 transition"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
 
               {/* GRADING RUBRIC SECTION */}
