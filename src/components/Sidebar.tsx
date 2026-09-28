@@ -43,6 +43,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenAuthModal
 }) => {
   const { currentUser, role, logout, darkMode, toggleDarkMode } = useAuth();
+  const [, setTick] = React.useState(0);
+
+  React.useEffect(() => {
+    const unsub = dataService.subscribe(() => setTick(t => t + 1));
+    return unsub;
+  }, []);
 
   const homeworks = dataService.getHomeworks();
   const announcements = dataService.getAnnouncements();

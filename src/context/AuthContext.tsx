@@ -225,8 +225,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const isMasterAdminMatch = isRootAdmin && (cleanPass === 'Gnsial2026!Admin' || cleanPass === 'admin123');
       const isInitialMatch = 
         isMasterAdminMatch ||
-        (isAdminUser && (cleanPass === 'Gnsial2026!Admin' || cleanPass === 'admin123')) ||
-        (user.role === 'teacher' && (cleanPass === 'ogretmen123' || cleanPass === '123456'));
+        (isAdminUser && (cleanPass === 'Gnsial2026!Admin' || cleanPass === 'admin123'));
 
       if (isInitialMatch || cleanPass.length >= 6) {
         await dataService.updateUserProfile(user.uid, { password: cleanPass });

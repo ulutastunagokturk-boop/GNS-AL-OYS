@@ -136,7 +136,7 @@ export function isAllSchool(str?: string): boolean {
   return s === 'tumokul' || s === 'tümokul' || s === 'all' || s === 'herkes' || s === 'tum' || s === 'tüm' || s.includes('tumokul') || s.includes('tümokul') || s.includes('herkes');
 }
 
-const CACHE_STORAGE_KEY = 'gnisal_oys_v13_clean_slate';
+const CACHE_STORAGE_KEY = 'gnisal_oys_v15_db_first';
 
 export interface LocalCacheStore {
   users: UserProfile[];
@@ -171,130 +171,40 @@ class DataService {
   }
 
   private loadInitialCache(): LocalCacheStore {
+    // Completely wipe legacy local storage caches with old mock users
     try {
-      const saved = localStorage.getItem(CACHE_STORAGE_KEY);
-      if (saved) {
-        const parsed: LocalCacheStore = JSON.parse(saved);
-        // Keep accounts while ensuring deleted account remains excluded
-        parsed.users = (parsed.users || []).filter(u => {
-          const uid = (u.uid || '').toLowerCase();
-          const email = (u.email || '').toLowerCase().trim();
-          if (
-            email === 'ulutastunagokturk@gmail.com' ||
-            uid === 'admin-owner-ulutas'
-          ) {
-            return false;
-          }
-          return true;
-        });
-
-        // Purge mock generated schedule slots from cache
-        parsed.schedules = (parsed.schedules || []).filter(s => 
-          !s.id.startsWith('slot-10A-') &&
-          !s.id.startsWith('slot-9A-') &&
-          !s.id.startsWith('slot-10B-') &&
-          !s.id.startsWith('slot-11A-') &&
-          !s.id.startsWith('slot-11B-') &&
-          !s.id.startsWith('slot-12A-')
-        );
-
-        if (!parsed.users.some(u => u.email?.toLowerCase() === INITIAL_ADMIN.email.toLowerCase())) {
-          parsed.users.unshift(INITIAL_ADMIN);
-        }
-
-        parsed.roleAssignments = (parsed.roleAssignments || []).filter(ra => {
-          const em = (ra.userEmail || '').toLowerCase().trim();
-          return em !== 'ulutastunagokturk@gmail.com' && ra.id !== 'assign-admin-owner';
-        });
-
-        try {
-          localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(parsed));
-        } catch {}
-
-        if (!parsed.announcements || parsed.announcements.length === 0) {
-          parsed.announcements = [...INITIAL_ANNOUNCEMENTS];
-        }
-        if (!parsed.homeworks || parsed.homeworks.length === 0) {
-          parsed.homeworks = [...INITIAL_HOMEWORKS];
-        }
-        if (!parsed.classes || parsed.classes.length === 0) {
-          parsed.classes = [...INITIAL_CLASSES];
-        }
-        if (!parsed.submissions) {
-          parsed.submissions = [];
-        }
-        if (INITIAL_TEACHERS.length > 0 && !parsed.users.some(u => u.uid === INITIAL_TEACHERS[0].uid || u.email?.toLowerCase() === INITIAL_TEACHERS[0].email.toLowerCase())) {
-          parsed.users.push(INITIAL_TEACHERS[0]);
-        }
-
-        if (!parsed.schedules) {
-          parsed.schedules = [];
-        }
-        if (!parsed.scheduleNotes) {
-          parsed.scheduleNotes = {};
-        }
-        return parsed;
-      }
-    } catch (e) {
-      console.warn('Could not read from localStorage', e);
-    }
-
-    // Pure Clean Initial State with INITIAL_ADMIN and INITIAL_TEACHERS
-    const allUsers = [INITIAL_ADMIN, ...INITIAL_TEACHERS];
-    
-    const initialRoleAssignments: RoleAssignment[] = [
-      {
-        id: 'assign-admin-1',
-        userEmail: INITIAL_ADMIN.email,
-        userName: INITIAL_ADMIN.displayName,
-        assignedRole: 'admin',
-        assignedBy: 'Sistem Kurucusu / Kök Yetkili',
-        assignedAt: new Date().toISOString(),
-        status: 'active',
-        notes: 'Ana Yönetici (Root Admin) tam yetkili sistem yöneticisi',
-        permissions: [
-          'Tam Sistem ve Veritabanı Erişimi',
-          'Yeni Yönetici (Admin) ve Öğretmen Atama',
-          'Tüm Not, Sınav ve Devamsızlık Yönetimi',
-          'Öğrenci ve Sınıf Kayıt İşlemleri',
-          'Firestore Güvenlik & Sistem Logları'
-        ]
-      }
-    ];
-
-    const systemLogs: SystemAuditLog[] = [
-      {
-        id: 'log-1',
-        action: 'Sistem Başlatıldı',
-        actorName: 'Tlogix Okul Yönetimi (Root Admin)',
-        actorRole: 'admin',
-        target: 'GNSİAL OYS',
-        details: 'Portal temiz sıfır durumunda başlatıldı. Tüm kontrol yöneticilere aktarıldı.',
-        timestamp: new Date().toISOString()
-      }
-    ];
+      [
+        'gnisal_oys_v13_clean_slate',
+        'gnisal_oys_v12',
+        'gnisal_oys_v11',
+        'gnisal_oys_v10',
+        'gnisal_oys_v9',
+        'okul_portal_users'
+      ].forEach(k => {
+        try { localStorage.removeItem(k); } catch {}
+      });
+    } catch {}
 
     const initialStore: LocalCacheStore = {
-      users: allUsers,
-      roleAssignments: initialRoleAssignments,
-      announcements: INITIAL_ANNOUNCEMENTS,
-      homeworks: INITIAL_HOMEWORKS,
+      users: [], // Strictly loaded from Google Cloud Firestore database
+      roleAssignments: [],
+      announcements: [], // Strictly loaded from Google Cloud Firestore database
+      homeworks: [], // Strictly loaded from Google Cloud Firestore database
       submissions: [],
       grades: [],
       attendance: [],
-      classes: INITIAL_CLASSES,
+      classes: [...INITIAL_CLASSES],
       notifications: [],
       badges: PREDEFINED_BADGES,
       studentBadges: [],
       conversations: [],
       messages: [],
-      systemLogs: systemLogs,
+      systemLogs: [],
       schedules: [],
       scheduleNotes: {},
       lastUpdated: Date.now()
     };
 
-    this.saveCache(initialStore, false);
     return initialStore;
   }
 
@@ -387,32 +297,20 @@ class DataService {
 
     // Ödevler (Homeworks): Sunucudaki tam listeyi doğrudan uygula
     if (Array.isArray(state.homeworks)) {
-      if (state.homeworks.length > 0) {
-        this.cache.homeworks = state.homeworks;
-        changed = true;
-      } else if (!this.cache.homeworks || this.cache.homeworks.length === 0) {
-        this.cache.homeworks = [...INITIAL_HOMEWORKS];
-        changed = true;
-      }
+      this.cache.homeworks = state.homeworks;
+      changed = true;
     }
 
     // Ödev Teslimleri (Submissions):
     if (Array.isArray(state.submissions)) {
-      if (state.submissions.length > 0 || !this.cache.submissions) {
-        this.cache.submissions = state.submissions;
-        changed = true;
-      }
+      this.cache.submissions = state.submissions;
+      changed = true;
     }
 
     // Duyurular (Announcements):
     if (Array.isArray(state.announcements)) {
-      if (state.announcements.length > 0) {
-        this.cache.announcements = state.announcements;
-        changed = true;
-      } else if (!this.cache.announcements || this.cache.announcements.length === 0) {
-        this.cache.announcements = [...INITIAL_ANNOUNCEMENTS];
-        changed = true;
-      }
+      this.cache.announcements = state.announcements;
+      changed = true;
     }
 
     // Notlar (Grades):
@@ -467,9 +365,8 @@ class DataService {
     }
 
     // Kullanıcılar (Users):
-    if (Array.isArray(state.users) && state.users.length > 0) {
+    if (Array.isArray(state.users)) {
       const userMap = new Map<string, UserProfile>();
-      userMap.set(INITIAL_ADMIN.uid, INITIAL_ADMIN);
       state.users
         .filter((u: UserProfile) => (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' && u.uid !== 'admin-owner-ulutas')
         .forEach((u: UserProfile) => userMap.set(u.uid, u));
@@ -491,31 +388,25 @@ class DataService {
 
   private async initData() {
     try {
-      // 1. First sync from live Supabase PostgreSQL database tables and backups (Primary)
-      const synced = await this.syncFromSupabaseDatabase();
+      // 1. Setup real-time Firestore listeners first
+      this.setupFirestoreListeners();
 
-      // 2. Ensure default starter data exists if cache was empty and not synced
-      if (!synced) {
-        this.ensureStarterDataIfEmpty();
-      }
+      // 2. Fetch live data directly from Google Cloud Firestore database
+      await this.syncUsersFromFirestore();
+      await this.seedInitialAdminIfMissing();
+      await this.syncHomeworksFromCloud();
+      await this.syncAnnouncementsFromCloud();
 
       // 3. Setup real-time multi-device SSE listener
       this.setupRealtimeSync();
 
-      // 4. Setup Firestore listeners & sync
-      this.setupFirestoreListeners();
-      await this.syncUsersFromFirestore();
-      await this.seedInitialAdminIfMissing();
-      await this.seedAllInitialDataIfMissingInFirestore();
-      await this.syncHomeworksFromCloud();
-
-      // 5. Ensure live relational database has current classes and users
-      await this.seedSupabaseIfEmpty();
+      // 4. Background sync with Supabase if configured
+      await this.syncFromSupabaseDatabase(true);
 
       this.isInitialized = true;
       this.setupLiveSyncPolling();
     } catch (err) {
-      console.log('Running in local-first cached mode with Firebase fallback', err);
+      console.log('Database initData note:', err);
     }
   }
 
@@ -539,100 +430,67 @@ class DataService {
   }
 
   /**
-   * Hem Supabase hem Firestore üzerinden tüm ödevleri ve teslimatları buluttan çeker, yerel önbellek ile harmanlar.
+   * Cloud Firestore üzerinden tüm ödevleri ve teslimatları çeker, yerel durumu veritabanıyla senkronize eder.
    */
   public async syncHomeworksFromCloud(): Promise<Homework[]> {
     let remoteHomeworks: Homework[] = [];
 
-    // 1. Fetch from Supabase API (/api/homeworks)
-    try {
-      const res = await fetch('/api/homeworks');
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && Array.isArray(json.homeworks) && json.homeworks.length > 0) {
-          remoteHomeworks = json.homeworks;
-        }
-      }
-    } catch (e) {
-      console.warn('[DataService] /api/homeworks sync note:', e);
-    }
-
-    // 2. Fetch from Cloud Firestore (/homeworks)
+    // 1. Fetch directly from Cloud Firestore (/homeworks)
     try {
       const hwSnap = await getDocs(collection(db, 'homeworks'));
       if (!hwSnap.empty) {
-        const firestoreList: Homework[] = [];
         hwSnap.forEach(d => {
-          firestoreList.push({ id: d.id, ...d.data() } as Homework);
+          remoteHomeworks.push({ id: d.id, ...d.data() } as Homework);
         });
-        const map = new Map<string, Homework>();
-        remoteHomeworks.forEach(h => map.set(h.id, h));
-        firestoreList.forEach(h => map.set(h.id, h));
-        remoteHomeworks = Array.from(map.values());
       }
     } catch (e) {
       console.warn('[DataService] Firestore homeworks sync note:', e);
     }
 
-    // 3. Merge into local cache
-    if (remoteHomeworks.length > 0) {
-      const map = new Map<string, Homework>();
-      (this.cache.homeworks || []).forEach(h => map.set(h.id, h));
-      remoteHomeworks.forEach(h => map.set(h.id, h));
-      this.cache.homeworks = Array.from(map.values()).sort(
-        (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-      );
-      this.saveCache(this.cache, false);
-      this.notifySubscribers();
-    }
-
-    // 4. Fetch submissions from Server API (/api/submissions) and Firestore
-    let remoteSubmissions: HomeworkSubmission[] = [];
-    try {
-      const subRes = await fetch('/api/submissions');
-      if (subRes.ok) {
-        const subJson = await subRes.json();
-        if (subJson.success && Array.isArray(subJson.submissions) && subJson.submissions.length > 0) {
-          remoteSubmissions = subJson.submissions;
+    // 2. Fallback to API if Firestore direct fetch returned empty
+    if (remoteHomeworks.length === 0) {
+      try {
+        const res = await fetch('/api/homeworks');
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.homeworks)) {
+            remoteHomeworks = json.homeworks;
+          }
         }
+      } catch (e) {
+        console.warn('[DataService] /api/homeworks sync note:', e);
       }
-    } catch (e) {
-      console.warn('[DataService] /api/submissions sync note:', e);
     }
 
+    // Database is source of truth for homeworks
+    this.cache.homeworks = remoteHomeworks.sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+    this.saveCache(this.cache, false);
+    this.notifySubscribers();
+
+    // Fetch submissions from Firestore
+    let remoteSubmissions: HomeworkSubmission[] = [];
     try {
       const subSnap = await getDocs(collection(db, 'homework_submissions'));
       if (!subSnap.empty) {
-        const firestoreSubs: HomeworkSubmission[] = [];
-        subSnap.forEach(d => firestoreSubs.push({ id: d.id, ...d.data() } as HomeworkSubmission));
-        const subMap = new Map<string, HomeworkSubmission>();
-        remoteSubmissions.forEach(s => subMap.set(s.id, s));
-        firestoreSubs.forEach(s => subMap.set(s.id, s));
-        remoteSubmissions = Array.from(subMap.values());
+        subSnap.forEach(d => remoteSubmissions.push({ id: d.id, ...d.data() } as HomeworkSubmission));
       }
     } catch {}
 
-    if (remoteSubmissions.length > 0) {
-      const subMap = new Map<string, HomeworkSubmission>();
-      (this.cache.submissions || []).forEach(s => subMap.set(s.id, s));
-      remoteSubmissions.forEach(s => subMap.set(s.id, s));
-      this.cache.submissions = Array.from(subMap.values());
-      this.saveCache(this.cache, false);
-      this.notifySubscribers();
-    }
+    this.cache.submissions = remoteSubmissions;
+    this.saveCache(this.cache, false);
+    this.notifySubscribers();
 
     return this.cache.homeworks;
   }
 
   /**
-   * Buluttan gelen ödev listesini yerel önbellekle birleştirir.
+   * Buluttan gelen ödev listesini uygular.
    */
   public mergeHomeworksFromCloud(cloudHomeworks: Homework[]): void {
-    if (!Array.isArray(cloudHomeworks) || cloudHomeworks.length === 0) return;
-    const map = new Map<string, Homework>();
-    (this.cache.homeworks || []).forEach(h => map.set(h.id, h));
-    cloudHomeworks.forEach(h => map.set(h.id, h));
-    this.cache.homeworks = Array.from(map.values()).sort(
+    if (!Array.isArray(cloudHomeworks)) return;
+    this.cache.homeworks = cloudHomeworks.sort(
       (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
     );
     this.saveCache(this.cache, false);
@@ -640,126 +498,48 @@ class DataService {
   }
 
   /**
-   * Hem sunucu API (/api/announcements) hem Firestore üzerinden duyuruları çeker ve yerel önbellekle birleştirir.
+   * Cloud Firestore üzerinden duyuruları çeker ve yerel durumu veritabanıyla senkronize eder.
    */
   public async syncAnnouncementsFromCloud(): Promise<Announcement[]> {
     let remoteAnnouncements: Announcement[] = [];
 
-    // 1. Fetch from Server API (/api/announcements)
-    try {
-      const res = await fetch('/api/announcements');
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && Array.isArray(json.announcements) && json.announcements.length > 0) {
-          remoteAnnouncements = json.announcements;
-        }
-      }
-    } catch (e) {
-      console.warn('[DataService] /api/announcements sync note:', e);
-    }
-
-    // 2. Fetch from Cloud Firestore (/announcements)
+    // 1. Fetch directly from Cloud Firestore (/announcements)
     try {
       const annSnap = await getDocs(collection(db, 'announcements'));
       if (!annSnap.empty) {
-        const firestoreList: Announcement[] = [];
         annSnap.forEach(d => {
-          firestoreList.push({ id: d.id, ...d.data() } as Announcement);
+          remoteAnnouncements.push({ id: d.id, ...d.data() } as Announcement);
         });
-        const map = new Map<string, Announcement>();
-        remoteAnnouncements.forEach(a => map.set(a.id, a));
-        firestoreList.forEach(a => map.set(a.id, a));
-        remoteAnnouncements = Array.from(map.values());
       }
     } catch (e) {
       console.warn('[DataService] Firestore announcements sync note:', e);
     }
 
-    // 3. Merge into local cache
-    if (remoteAnnouncements.length > 0) {
-      const map = new Map<string, Announcement>();
-      (this.cache.announcements || []).forEach(a => map.set(a.id, a));
-      remoteAnnouncements.forEach(a => map.set(a.id, a));
-      this.cache.announcements = Array.from(map.values()).sort(
-        (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-      );
-      this.saveCache(this.cache, false);
-      this.notifySubscribers();
+    // 2. Fallback to API if Firestore direct fetch returned empty
+    if (remoteAnnouncements.length === 0) {
+      try {
+        const res = await fetch('/api/announcements');
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.announcements)) {
+            remoteAnnouncements = json.announcements;
+          }
+        }
+      } catch (e) {
+        console.warn('[DataService] /api/announcements sync note:', e);
+      }
     }
+
+    // Database is source of truth for announcements
+    this.cache.announcements = remoteAnnouncements.sort((a, b) => {
+      if (a.pinned && !b.pinned) return -1;
+      if (!a.pinned && b.pinned) return 1;
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    });
+    this.saveCache(this.cache, false);
+    this.notifySubscribers();
 
     return this.cache.announcements;
-  }
-
-  private ensureStarterDataIfEmpty() {
-    let changed = false;
-
-    // 1. Classes: ensure 9-D and initial classes exist
-    if (!this.cache.classes || this.cache.classes.length === 0) {
-      this.cache.classes = [...INITIAL_CLASSES];
-      changed = true;
-    } else {
-      const has9D = this.cache.classes.some(c => normalizeClassName(c.name) === '9D');
-      if (!has9D) {
-        this.cache.classes.unshift({
-          id: 'class-9-d',
-          name: '9-D',
-          gradeLevel: 9,
-          branch: 'D',
-          section: 'D',
-          academicYear: '2026-2027',
-          studentCount: 22
-        });
-        changed = true;
-      }
-    }
-
-    // 2. Announcements
-    if ((!this.cache.announcements || this.cache.announcements.length === 0) && INITIAL_ANNOUNCEMENTS.length > 0) {
-      this.cache.announcements = [...INITIAL_ANNOUNCEMENTS];
-      changed = true;
-    }
-
-    // 3. Homeworks
-    if ((!this.cache.homeworks || this.cache.homeworks.length === 0) && INITIAL_HOMEWORKS.length > 0) {
-      this.cache.homeworks = [...INITIAL_HOMEWORKS];
-      changed = true;
-    }
-
-    // 4. Grades
-    if (!this.cache.grades || this.cache.grades.length === 0) {
-      const students = this.getStudents();
-      if (students.length > 0) {
-        const seedGrades: GradeRecord[] = [];
-        const subjects = ['Matematik', 'Türk Dili ve Edebiyatı', 'Fizik'];
-        students.forEach((st, idx) => {
-          subjects.forEach((subj, subIdx) => {
-            const baseScore = 75 + ((idx * 7 + subIdx * 11) % 23);
-            seedGrades.push({
-              id: `grade-${st.uid}-${subj}-Yazili1`,
-              studentId: st.uid,
-              studentName: st.displayName,
-              studentNumber: st.schoolNumber || '',
-              studentClass: st.classGrade || '9-D',
-              subject: subj,
-              examType: 'Yazılı 1',
-              score: baseScore,
-              maxScore: 100,
-              examDate: '2026-09-18',
-              teacherId: 'admin-tlogix',
-              teacherName: 'Zümre Öğretmeni',
-              notes: '1. Dönem 1. Yazılı Sınav Değerlendirmesi',
-              createdAt: '2026-09-18T10:00:00.000Z'
-            });
-          });
-        });
-        this.cache.grades = seedGrades;
-        changed = true;
-      }
-    }
-
-    if (changed) {
-      this.saveCache(this.cache);
-    }
   }
 
   private async seedSupabaseIfEmpty() {
@@ -790,11 +570,11 @@ class DataService {
   }
 
   /**
-   * Ensures initial classes, announcements, and homeworks exist in Firestore.
+   * Ensures initial classes exist in Firestore if needed.
    */
   private async seedAllInitialDataIfMissingInFirestore() {
     try {
-      // 1. Ensure all initial classes exist
+      // Ensure initial classes exist
       for (const c of INITIAL_CLASSES) {
         try {
           const docRef = doc(db, 'classes', c.id);
@@ -803,26 +583,6 @@ class DataService {
             await setDoc(docRef, sanitizeForFirestore(c));
           }
         } catch {}
-      }
-
-      // 2. Ensure initial announcements exist
-      const annSnap = await getDocs(collection(db, 'announcements'));
-      if (annSnap.empty) {
-        for (const a of INITIAL_ANNOUNCEMENTS) {
-          try {
-            await setDoc(doc(db, 'announcements', a.id), sanitizeForFirestore(a));
-          } catch {}
-        }
-      }
-
-      // 3. Ensure initial homeworks exist
-      const hwSnap = await getDocs(collection(db, 'homeworks'));
-      if (hwSnap.empty) {
-        for (const h of INITIAL_HOMEWORKS) {
-          try {
-            await setDoc(doc(db, 'homeworks', h.id), sanitizeForFirestore(h));
-          } catch {}
-        }
       }
     } catch (e) {
       console.log('[Firestore] seedAllInitialData note:', e);
@@ -1197,17 +957,15 @@ class DataService {
           }
         }
 
-        const mergedMap = new Map<string, UserProfile>();
-        mergedMap.set(INITIAL_ADMIN.uid, INITIAL_ADMIN);
-        this.cache.users
-          .filter(u => (u.email || '').toLowerCase().trim() !== 'ulutastunagokturk@gmail.com' && u.uid !== 'admin-owner-ulutas')
-          .forEach(u => mergedMap.set(u.uid, u));
-        remoteUsers.forEach(u => mergedMap.set(u.uid, u));
-
-        this.cache.users = Array.from(mergedMap.values());
-        this.saveCache(this.cache);
+        // Database is the sole source of truth for all users
+        this.cache.users = remoteUsers;
+        this.saveCache(this.cache, false);
         this.notifySubscribers();
         return this.cache.users;
+      } else {
+        this.cache.users = [];
+        this.saveCache(this.cache, false);
+        this.notifySubscribers();
       }
     } catch (err) {
       console.warn('Could not sync users from Firestore on startup:', err);
@@ -1285,13 +1043,9 @@ class DataService {
           }
         });
 
-        // Merge all remote users into cache
-        const mergedMap = new Map<string, UserProfile>();
-        mergedMap.set(INITIAL_ADMIN.uid, INITIAL_ADMIN);
-        this.cache.users.forEach(u => mergedMap.set(u.uid, u));
-        remoteUsers.forEach(u => mergedMap.set(u.uid, u));
-        this.cache.users = Array.from(mergedMap.values());
-        this.saveCache(this.cache);
+        // Set users directly from database
+        this.cache.users = remoteUsers;
+        this.saveCache(this.cache, false);
         this.notifySubscribers();
       }
 
@@ -1307,22 +1061,19 @@ class DataService {
       // Listen to users from Firestore in real-time
       const usersQuery = collection(db, 'users');
       const unsubUsers = onSnapshot(usersQuery, (snapshot) => {
-        if (!snapshot.empty) {
-          const remoteUsers: UserProfile[] = [];
-          snapshot.forEach(docSnap => {
-            const data = docSnap.data() as UserProfile;
+        const remoteUsers: UserProfile[] = [];
+        snapshot.forEach(docSnap => {
+          const data = docSnap.data() as UserProfile;
+          const em = (data.email || '').toLowerCase().trim();
+          if (em !== 'ulutastunagokturk@gmail.com' && docSnap.id !== 'admin-owner-ulutas') {
             remoteUsers.push({ ...data, uid: docSnap.id });
-          });
+          }
+        });
 
-          const mergedMap = new Map<string, UserProfile>();
-          mergedMap.set(INITIAL_ADMIN.uid, INITIAL_ADMIN);
-          this.cache.users.forEach(u => mergedMap.set(u.uid, u));
-          remoteUsers.forEach(u => mergedMap.set(u.uid, u));
-
-          this.cache.users = Array.from(mergedMap.values());
-          this.saveCache(this.cache);
-          this.notifySubscribers();
-        }
+        // Database is the sole source of truth for users
+        this.cache.users = remoteUsers;
+        this.saveCache(this.cache, false);
+        this.notifySubscribers();
       }, (err) => {
         handleFirestoreError(err, OperationType.LIST, 'users');
       });
@@ -1331,13 +1082,11 @@ class DataService {
       // Listen to role_assignments from Firestore
       const roleAssignQuery = query(collection(db, 'role_assignments'), orderBy('assignedAt', 'desc'));
       const unsubRoleAssign = onSnapshot(roleAssignQuery, (snapshot) => {
-        if (!snapshot.empty) {
-          const list: RoleAssignment[] = [];
-          snapshot.forEach(docSnap => list.push({ id: docSnap.id, ...docSnap.data() } as RoleAssignment));
-          this.cache.roleAssignments = list;
-          this.saveCache(this.cache, false);
-          this.notifySubscribers();
-        }
+        const list: RoleAssignment[] = [];
+        snapshot.forEach(docSnap => list.push({ id: docSnap.id, ...docSnap.data() } as RoleAssignment));
+        this.cache.roleAssignments = list;
+        this.saveCache(this.cache, false);
+        this.notifySubscribers();
       }, (err) => {
         handleFirestoreError(err, OperationType.LIST, 'role_assignments');
       });
@@ -1345,46 +1094,35 @@ class DataService {
 
       // Listen to announcements
       const unsubAnn = onSnapshot(collection(db, 'announcements'), (snapshot) => {
-        if (!snapshot.empty) {
-          const list: Announcement[] = [];
-          snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as Announcement));
-          const map = new Map<string, Announcement>();
-          this.cache.announcements.forEach(a => map.set(a.id, a));
-          list.forEach(a => map.set(a.id, a));
-          this.cache.announcements = Array.from(map.values()).sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-          this.saveCache(this.cache, false);
-          this.notifySubscribers();
-        }
+        const list: Announcement[] = [];
+        snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as Announcement));
+        this.cache.announcements = list.sort((a, b) => {
+          if (a.pinned && !b.pinned) return -1;
+          if (!a.pinned && b.pinned) return 1;
+          return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+        });
+        this.saveCache(this.cache, false);
+        this.notifySubscribers();
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'announcements'));
       this.listeners.set('announcements', unsubAnn);
 
       // Listen to homeworks
       const unsubHw = onSnapshot(collection(db, 'homeworks'), (snapshot) => {
-        if (!snapshot.empty) {
-          const list: Homework[] = [];
-          snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as Homework));
-          const map = new Map<string, Homework>();
-          this.cache.homeworks.forEach(h => map.set(h.id, h));
-          list.forEach(h => map.set(h.id, h));
-          this.cache.homeworks = Array.from(map.values()).sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-          this.saveCache(this.cache, false);
-          this.notifySubscribers();
-        }
+        const list: Homework[] = [];
+        snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as Homework));
+        this.cache.homeworks = list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+        this.saveCache(this.cache, false);
+        this.notifySubscribers();
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'homeworks'));
       this.listeners.set('homeworks', unsubHw);
 
       // Listen to homework submissions
       const unsubSubmissions = onSnapshot(collection(db, 'homework_submissions'), (snapshot) => {
-        if (!snapshot.empty) {
-          const list: HomeworkSubmission[] = [];
-          snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as HomeworkSubmission));
-          const map = new Map<string, HomeworkSubmission>();
-          this.cache.submissions.forEach(s => map.set(s.id, s));
-          list.forEach(s => map.set(s.id, s));
-          this.cache.submissions = Array.from(map.values());
-          this.saveCache(this.cache, false);
-          this.notifySubscribers();
-        }
+        const list: HomeworkSubmission[] = [];
+        snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() } as HomeworkSubmission));
+        this.cache.submissions = list;
+        this.saveCache(this.cache, false);
+        this.notifySubscribers();
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'homework_submissions'));
       this.listeners.set('homework_submissions', unsubSubmissions);
 
@@ -2827,8 +2565,24 @@ class DataService {
     try {
       await deleteDoc(doc(db, 'homeworks', homeworkId));
     } catch (e) {
-      console.log(e);
+      console.log('Firestore delete homework error:', e);
     }
+
+    try {
+      const q = query(collection(db, 'homework_submissions'), where('homeworkId', '==', homeworkId));
+      const subSnap = await getDocs(q);
+      if (!subSnap.empty) {
+        const batch = writeBatch(db);
+        subSnap.forEach(d => batch.delete(d.ref));
+        await batch.commit();
+      }
+    } catch (e) {
+      console.log('Firestore delete submissions error:', e);
+    }
+
+    try {
+      await fetch(`/api/homeworks/${homeworkId}`, { method: 'DELETE' });
+    } catch {}
   }
 
   public getHomeworkById(homeworkId: string): Homework | undefined {

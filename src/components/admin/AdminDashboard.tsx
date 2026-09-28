@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { dataService } from '../../services/dataService';
 import { UserProfile, SchoolClass, RoleAssignment, UserRole } from '../../types';
@@ -60,6 +60,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 }) => {
   const { currentUser } = useAuth();
   const [internalTab, setInternalTab] = useState<AdminTab>('overview');
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    dataService.syncUsersFromFirestore();
+    dataService.syncHomeworksFromCloud();
+    dataService.syncAnnouncementsFromCloud();
+    const unsub = dataService.subscribe(() => {
+      setTick(t => t + 1);
+    });
+    return unsub;
+  }, []);
 
   const activeTab = (controlledTab as any) || internalTab;
   const setActiveTab = (tab: AdminTab) => {
