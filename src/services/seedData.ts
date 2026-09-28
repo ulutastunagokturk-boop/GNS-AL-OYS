@@ -12,17 +12,7 @@ import {
   ChatMessage
 } from '../types';
 
-export const INITIAL_CLASSES: SchoolClass[] = [
-  { id: 'class-9-d', name: '9-D', gradeLevel: 9, branch: 'D', section: 'D', academicYear: '2026-2027', studentCount: 22 },
-  { id: 'class-9-a', name: '9-A', gradeLevel: 9, branch: 'A', section: 'A', academicYear: '2026-2027', studentCount: 24 },
-  { id: 'class-9-b', name: '9-B', gradeLevel: 9, branch: 'B', section: 'B', academicYear: '2026-2027', studentCount: 24 },
-  { id: 'class-10-a', name: '10-A', gradeLevel: 10, branch: 'A', section: 'A', academicYear: '2026-2027', studentCount: 25 },
-  { id: 'class-10-b', name: '10-B', gradeLevel: 10, branch: 'B', section: 'B', academicYear: '2026-2027', studentCount: 25 },
-  { id: 'class-11-a', name: '11-A', gradeLevel: 11, branch: 'A', section: 'A', academicYear: '2026-2027', studentCount: 23 },
-  { id: 'class-11-b', name: '11-B', gradeLevel: 11, branch: 'B', section: 'B', academicYear: '2026-2027', studentCount: 23 },
-  { id: 'class-12-a', name: '12-A', gradeLevel: 12, branch: 'A', section: 'A', academicYear: '2026-2027', studentCount: 26 },
-  { id: 'class-12-b', name: '12-B', gradeLevel: 12, branch: 'B', section: 'B', academicYear: '2026-2027', studentCount: 26 }
-];
+export const INITIAL_CLASSES: SchoolClass[] = [];
 
 export const INITIAL_TEACHERS: UserProfile[] = [];
 

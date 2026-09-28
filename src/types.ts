@@ -173,6 +173,7 @@ export interface SchoolClass {
   academicYear?: string;
   studentCount?: number;
   advisorTeacher?: string;
+  advisorTeacherId?: string;
   capacity?: number;
 }
 

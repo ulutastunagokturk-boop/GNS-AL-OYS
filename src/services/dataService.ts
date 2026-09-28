@@ -43,7 +43,6 @@ import {
   ExcelParentImportSummary
 } from '../types';
 import { 
-  INITIAL_CLASSES, 
   INITIAL_TEACHERS, 
   INITIAL_ADMIN, 
   generateStudentCohort, 
@@ -136,7 +135,7 @@ export function isAllSchool(str?: string): boolean {
   return s === 'tumokul' || s === 'tümokul' || s === 'all' || s === 'herkes' || s === 'tum' || s === 'tüm' || s.includes('tumokul') || s.includes('tümokul') || s.includes('herkes');
 }
 
-const CACHE_STORAGE_KEY = 'gnisal_oys_v15_db_first';
+const CACHE_STORAGE_KEY = 'gnisal_oys_v16_db_classes';
 
 export interface LocalCacheStore {
   users: UserProfile[];
@@ -171,9 +170,10 @@ class DataService {
   }
 
   private loadInitialCache(): LocalCacheStore {
-    // Completely wipe legacy local storage caches with old mock users
+    // Completely wipe legacy local storage caches with old mock users and seed classes
     try {
       [
+        'gnisal_oys_v15_db_first',
         'gnisal_oys_v13_clean_slate',
         'gnisal_oys_v12',
         'gnisal_oys_v11',
@@ -186,14 +186,14 @@ class DataService {
     } catch {}
 
     const initialStore: LocalCacheStore = {
-      users: [], // Strictly loaded from Google Cloud Firestore database
+      users: [], // Strictly loaded from database
       roleAssignments: [],
-      announcements: [], // Strictly loaded from Google Cloud Firestore database
-      homeworks: [], // Strictly loaded from Google Cloud Firestore database
+      announcements: [], // Strictly loaded from database
+      homeworks: [], // Strictly loaded from database
       submissions: [],
       grades: [],
       attendance: [],
-      classes: [...INITIAL_CLASSES],
+      classes: [], // Strictly loaded from Supabase & Firestore database (no seeds)
       notifications: [],
       badges: PREDEFINED_BADGES,
       studentBadges: [],
@@ -325,8 +325,8 @@ class DataService {
       changed = true;
     }
 
-    // Sınıflar (Classes):
-    if (Array.isArray(state.classes) && state.classes.length > 0) {
+    // Sınıflar (Classes): Veritabanındaki tam listeyi doğrudan uygula
+    if (Array.isArray(state.classes)) {
       this.cache.classes = state.classes;
       changed = true;
     }
@@ -391,9 +391,10 @@ class DataService {
       // 1. Setup real-time Firestore listeners first
       this.setupFirestoreListeners();
 
-      // 2. Fetch live data directly from Google Cloud Firestore database
+      // 2. Fetch live data directly from Supabase & Firestore databases
       await this.syncUsersFromFirestore();
       await this.seedInitialAdminIfMissing();
+      await this.syncClassesFromCloud();
       await this.syncHomeworksFromCloud();
       await this.syncAnnouncementsFromCloud();
 
@@ -570,23 +571,61 @@ class DataService {
   }
 
   /**
-   * Ensures initial classes exist in Firestore if needed.
+   * Supabase ve Firestore üzerinden tüm sınıf ve şubeleri çeker, yerel durumu veritabanıyla senkronize eder.
    */
-  private async seedAllInitialDataIfMissingInFirestore() {
+  public async syncClassesFromCloud(): Promise<SchoolClass[]> {
+    let remoteClasses: SchoolClass[] = [];
+
+    // 1. Fetch from Supabase via backend API
     try {
-      // Ensure initial classes exist
-      for (const c of INITIAL_CLASSES) {
-        try {
-          const docRef = doc(db, 'classes', c.id);
-          const snap = await getDoc(docRef);
-          if (!snap.exists()) {
-            await setDoc(docRef, sanitizeForFirestore(c));
-          }
-        } catch {}
+      const res = await fetch('/api/classes');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.classes)) {
+          remoteClasses = json.classes;
+        }
       }
     } catch (e) {
-      console.log('[Firestore] seedAllInitialData note:', e);
+      console.warn('[DataService] /api/classes fetch note:', e);
     }
+
+    // 2. Direct Firestore fallback if backend returned empty
+    if (remoteClasses.length === 0) {
+      try {
+        const snap = await getDocs(collection(db, 'classes'));
+        if (!snap.empty) {
+          snap.forEach(docSnap => {
+            const raw = docSnap.data() as any;
+            remoteClasses.push({
+              id: docSnap.id,
+              name: raw.name || '',
+              gradeLevel: raw.gradeLevel || 9,
+              branch: raw.branch || raw.section || (raw.name ? raw.name.split('-')[1] : 'A') || 'A',
+              section: raw.section || raw.branch || 'A',
+              academicYear: raw.academicYear || '2026-2027',
+              advisorTeacher: raw.advisorTeacher || undefined,
+              advisorTeacherId: raw.advisorTeacherId || undefined,
+              capacity: raw.capacity || 34,
+              studentCount: raw.studentCount || 0
+            });
+          });
+        }
+      } catch (err) {
+        console.warn('[DataService] Firestore classes fetch note:', err);
+      }
+    }
+
+    // Sort strictly by gradeLevel and name
+    remoteClasses.sort((a, b) => {
+      if (a.gradeLevel !== b.gradeLevel) return a.gradeLevel - b.gradeLevel;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+
+    this.cache.classes = remoteClasses;
+    this.saveCache(this.cache, false);
+    this.notifySubscribers();
+
+    return this.cache.classes;
   }
 
   /**
@@ -754,9 +793,6 @@ class DataService {
         } catch {}
       }
 
-      // Seed any missing defaults
-      await this.seedAllInitialDataIfMissingInFirestore();
-
       this.saveCache(this.cache, false);
       this.notifySubscribers();
 
@@ -833,11 +869,10 @@ class DataService {
             capacity: raw.capacity || 30
           });
         });
-        const map = new Map<string, SchoolClass>();
-        INITIAL_CLASSES.forEach(c => map.set(c.id, c));
-        this.cache.classes.forEach(c => map.set(c.id, c));
-        clsList.forEach(c => map.set(c.id, c));
-        this.cache.classes = Array.from(map.values());
+        this.cache.classes = clsList.sort((a, b) => {
+          if (a.gradeLevel !== b.gradeLevel) return a.gradeLevel - b.gradeLevel;
+          return (a.name || '').localeCompare(b.name || '');
+        });
       }
 
       if (!aSnap.empty) {
@@ -1142,11 +1177,14 @@ class DataService {
               capacity: raw.capacity || 30
             });
           });
-          const map = new Map<string, SchoolClass>();
-          INITIAL_CLASSES.forEach(c => map.set(c.id, c));
-          this.cache.classes.forEach(c => map.set(c.id, c));
-          list.forEach(c => map.set(c.id, c));
-          this.cache.classes = Array.from(map.values());
+          this.cache.classes = list.sort((a, b) => {
+            if (a.gradeLevel !== b.gradeLevel) return a.gradeLevel - b.gradeLevel;
+            return (a.name || '').localeCompare(b.name || '');
+          });
+          this.saveCache(this.cache, false);
+          this.notifySubscribers();
+        } else {
+          this.cache.classes = [];
           this.saveCache(this.cache, false);
           this.notifySubscribers();
         }
@@ -2281,42 +2319,18 @@ class DataService {
     }
   }
 
-  // ================= CLASSES =================
+  // ================= CLASSES / ŞUBELER (SUPABASE DATABASE DRIVEN) =================
   public getClasses(): SchoolClass[] {
-    const list = [...this.cache.classes];
-    // Guarantee that any class present in active students (such as '9-D', '9/D') is always represented
-    const studentClasses = new Set<string>();
-    this.cache.users.forEach(u => {
-      if (u.role === 'student' && u.classGrade && u.status !== 'deactivated') {
-        studentClasses.add(u.classGrade);
-      }
-    });
-
-    studentClasses.forEach(stCls => {
-      const norm = normalizeClassName(stCls);
-      const exists = list.some(c => normalizeClassName(c.name) === norm);
-      if (!exists) {
-        const gradeMatch = stCls.match(/(\d+)/);
-        const secMatch = stCls.match(/[A-Za-zÇĞİÖŞÜçğıöşü]/g);
-        const gradeLevel = gradeMatch ? parseInt(gradeMatch[1], 10) : 9;
-        const section = secMatch && secMatch.length > 0 ? secMatch[secMatch.length - 1].toUpperCase() : 'D';
-        const displayName = `${gradeLevel}-${section}`;
-        list.push({
-          id: `class-${norm.toLowerCase()}`,
-          name: displayName,
-          gradeLevel,
-          branch: section,
-          section,
-          academicYear: '2026-2027',
-          studentCount: this.getStudentsByClass(stCls).length
-        });
-      }
-    });
-
-    return list.sort((a, b) => {
-      if (a.gradeLevel !== b.gradeLevel) return a.gradeLevel - b.gradeLevel;
-      return a.name.localeCompare(b.name);
-    });
+    // Database is the sole source of truth for all classes (Supabase & Firestore)
+    return [...this.cache.classes]
+      .map(c => ({
+        ...c,
+        studentCount: this.getStudentsByClass(c.name).length
+      }))
+      .sort((a, b) => {
+        if (a.gradeLevel !== b.gradeLevel) return a.gradeLevel - b.gradeLevel;
+        return (a.name || '').localeCompare(b.name || '');
+      });
   }
 
   public getClassById(id: string): SchoolClass | undefined {
@@ -2330,9 +2344,8 @@ class DataService {
   }
 
   public async addClass(newClass: SchoolClass, adminName: string = 'Okul Yönetimi'): Promise<SchoolClass> {
-    // Check if class with same name already exists
-    const cleanName = (newClass.name || '').trim().toLowerCase();
-    const existingIndex = this.cache.classes.findIndex(c => (c.name || '').trim().toLowerCase() === cleanName);
+    const cleanName = (newClass.name || '').trim();
+    const existingIndex = this.cache.classes.findIndex(c => (c.name || '').trim().toLowerCase() === cleanName.toLowerCase());
     let updated: SchoolClass[];
     
     if (existingIndex >= 0) {
@@ -2341,7 +2354,9 @@ class DataService {
       updated = [...this.cache.classes, newClass];
     }
     
-    this.saveCache({ ...this.cache, classes: updated });
+    this.cache.classes = updated;
+    this.saveCache(this.cache);
+    this.notifySubscribers();
 
     this.logSystemAction(
       'Sınıf / Şube Eklendi',
@@ -2351,10 +2366,22 @@ class DataService {
       `${newClass.name} şubesi oluşturuldu. Rehber Öğretmen: ${newClass.advisorTeacher || 'Atanmadı'}, Kontenjan: ${newClass.capacity || 34}`
     );
 
+    // 1. Supabase database via backend API
+    try {
+      await fetch('/api/classes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newClass)
+      });
+    } catch (e) {
+      console.warn('[Supabase addClass API note]:', e);
+    }
+
+    // 2. Google Cloud Firestore
     try {
       await setDoc(doc(db, 'classes', newClass.id), sanitizeForFirestore(newClass));
     } catch (e) {
-      console.log('Firebase add class write error:', e);
+      console.warn('[Firestore addClass write note]:', e);
     }
 
     return newClass;
@@ -2366,7 +2393,9 @@ class DataService {
 
     const updatedClass = { ...existing, ...updates };
     const updated = this.cache.classes.map(c => c.id === classId ? updatedClass : c);
-    this.saveCache({ ...this.cache, classes: updated });
+    this.cache.classes = updated;
+    this.saveCache(this.cache);
+    this.notifySubscribers();
 
     this.logSystemAction(
       'Sınıf Bilgileri Güncellendi',
@@ -2376,17 +2405,31 @@ class DataService {
       `${updatedClass.name} sınıfının bilgileri ve rehber öğretmen ataması güncellendi.`
     );
 
+    // 1. Supabase database via backend API
+    try {
+      await fetch(`/api/classes/${encodeURIComponent(classId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+    } catch (e) {
+      console.warn('[Supabase updateClass API note]:', e);
+    }
+
+    // 2. Google Cloud Firestore
     try {
       await setDoc(doc(db, 'classes', classId), sanitizeForFirestore(updatedClass), { merge: true });
     } catch (e) {
-      console.log('Firebase update class error:', e);
+      console.warn('[Firestore updateClass write note]:', e);
     }
   }
 
   public async deleteClass(classId: string, adminName: string = 'Okul Yönetimi'): Promise<void> {
     const targetClass = this.cache.classes.find(c => c.id === classId);
     const updated = this.cache.classes.filter(c => c.id !== classId);
-    this.saveCache({ ...this.cache, classes: updated });
+    this.cache.classes = updated;
+    this.saveCache(this.cache);
+    this.notifySubscribers();
 
     if (targetClass) {
       this.logSystemAction(
@@ -2398,10 +2441,20 @@ class DataService {
       );
     }
 
+    // 1. Supabase database via backend API
+    try {
+      await fetch(`/api/classes/${encodeURIComponent(classId)}`, {
+        method: 'DELETE'
+      });
+    } catch (e) {
+      console.warn('[Supabase deleteClass API note]:', e);
+    }
+
+    // 2. Google Cloud Firestore
     try {
       await deleteDoc(doc(db, 'classes', classId));
     } catch (e) {
-      console.log('Firebase delete class error:', e);
+      console.warn('[Firestore deleteClass note]:', e);
     }
   }
 

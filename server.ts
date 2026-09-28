@@ -1018,6 +1018,204 @@ function isAllSchoolServer(str?: string): boolean {
   return s === 'tumokul' || s === 'tümokul' || s === 'all' || s === 'herkes' || s === 'tum' || s === 'tüm' || s.includes('tumokul') || s.includes('tümokul');
 }
 
+// ================= CLASSES / ŞUBELER CRUD API ENDPOINTS (SUPABASE DB FIRST) =================
+app.get('/api/classes', async (req, res) => {
+  const { client } = getSupabaseInfo();
+  let classes: any[] = [];
+
+  if (client) {
+    try {
+      const { data: dbClasses, error } = await client
+        .from('classes')
+        .select('*');
+
+      if (!error && Array.isArray(dbClasses) && dbClasses.length > 0) {
+        classes = dbClasses.map((c: any) => {
+          const cleanName = c.name || '';
+          const gradeMatch = cleanName.match(/(\d+)/);
+          const secMatch = cleanName.match(/[A-Za-zÇĞİÖŞÜçğıöşü]/g);
+          const gradeLevel = c.grade_level ? parseInt(c.grade_level, 10) : (gradeMatch ? parseInt(gradeMatch[1], 10) : 9);
+          const branch = c.branch || (secMatch && secMatch.length > 0 ? secMatch[secMatch.length - 1].toUpperCase() : 'A');
+          return {
+            id: c.id,
+            name: cleanName,
+            gradeLevel: isNaN(gradeLevel) ? 9 : gradeLevel,
+            branch: branch,
+            section: c.section || branch,
+            academicYear: c.academic_year || '2026-2027',
+            advisorTeacher: c.advisor_teacher || undefined,
+            advisorTeacherId: c.teacher_id || undefined,
+            capacity: c.capacity || 34,
+            studentCount: c.student_count || 0
+          };
+        });
+      }
+    } catch (err) {
+      console.warn('[Supabase classes fetch error]:', err);
+    }
+  }
+
+  // Fallback to inMemoryLatestState or persistent JSON store if relational table was empty or not yet seeded
+  if (classes.length === 0) {
+    if (Array.isArray(inMemoryLatestState?.classes) && inMemoryLatestState.classes.length > 0) {
+      classes = inMemoryLatestState.classes;
+    } else {
+      const disk = loadPersistedState();
+      if (Array.isArray(disk?.classes) && disk.classes.length > 0) {
+        classes = disk.classes;
+      }
+    }
+  }
+
+  // Sort by gradeLevel and name
+  classes.sort((a, b) => {
+    if (a.gradeLevel !== b.gradeLevel) return a.gradeLevel - b.gradeLevel;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+
+  return res.json({ success: true, classes });
+});
+
+app.post('/api/classes', async (req, res) => {
+  const newClass = req.body;
+  if (!newClass || !newClass.name) {
+    return res.status(400).json({ error: 'Sınıf adı zorunludur' });
+  }
+
+  const classId = newClass.id || `class-${newClass.name.toLowerCase().replace(/[^a-z0-9]/g, '')}-${Date.now().toString().slice(-4)}`;
+  const cleanName = newClass.name.trim();
+  const gradeMatch = cleanName.match(/(\d+)/);
+  const secMatch = cleanName.match(/[A-Za-zÇĞİÖŞÜçğıöşü]/g);
+  const gradeLevel = Number(newClass.gradeLevel) || (gradeMatch ? parseInt(gradeMatch[1], 10) : 9);
+  const branch = newClass.branch || (secMatch && secMatch.length > 0 ? secMatch[secMatch.length - 1].toUpperCase() : 'A');
+
+  const classItem = {
+    id: classId,
+    name: cleanName,
+    gradeLevel,
+    branch,
+    section: newClass.section || branch,
+    academicYear: newClass.academicYear || '2026-2027',
+    advisorTeacher: newClass.advisorTeacher || undefined,
+    advisorTeacherId: newClass.advisorTeacherId || undefined,
+    capacity: Number(newClass.capacity) || 34,
+    studentCount: Number(newClass.studentCount) || 0
+  };
+
+  // 1. Write to Supabase relational table
+  const { client } = getSupabaseInfo();
+  if (client) {
+    try {
+      const classUuid = toValidUuid(classItem.id || classItem.name);
+      await client.from('classes').upsert({
+        id: classUuid,
+        name: classItem.name,
+        grade_level: String(classItem.gradeLevel),
+        teacher_id: classItem.advisorTeacherId ? toValidUuid(classItem.advisorTeacherId) : null
+      });
+    } catch (err) {
+      console.warn('[Supabase add class error]:', err);
+    }
+  }
+
+  // 2. Update server state
+  if (!inMemoryLatestState) {
+    inMemoryLatestState = { users: [], classes: [], homeworks: [], submissions: [], grades: [], attendance: [], announcements: [] };
+  }
+  if (!Array.isArray(inMemoryLatestState.classes)) {
+    inMemoryLatestState.classes = [];
+  }
+  const existingIndex = inMemoryLatestState.classes.findIndex((c: any) => c.id === classItem.id || c.name === classItem.name);
+  if (existingIndex >= 0) {
+    inMemoryLatestState.classes[existingIndex] = classItem;
+  } else {
+    inMemoryLatestState.classes.push(classItem);
+  }
+
+  savePersistedState(inMemoryLatestState);
+  broadcastStateUpdate(inMemoryLatestState);
+
+  return res.json({ success: true, class: classItem });
+});
+
+app.put('/api/classes/:id', async (req, res) => {
+  const { id } = req.params;
+  const updates = req.body;
+  const { client } = getSupabaseInfo();
+
+  if (client) {
+    try {
+      const classUuid = toValidUuid(id);
+      await client.from('classes').update({
+        name: updates.name,
+        grade_level: updates.gradeLevel ? String(updates.gradeLevel) : undefined,
+        teacher_id: updates.advisorTeacherId ? toValidUuid(updates.advisorTeacherId) : undefined
+      }).or(`id.eq.${classUuid},id.eq.${id},name.eq.${id}`);
+    } catch (err) {
+      console.warn('[Supabase update class error]:', err);
+    }
+  }
+
+  let updatedItem: any = null;
+  if (inMemoryLatestState && Array.isArray(inMemoryLatestState.classes)) {
+    const idx = inMemoryLatestState.classes.findIndex((c: any) => c.id === id || c.name === id);
+    if (idx >= 0) {
+      inMemoryLatestState.classes[idx] = { ...inMemoryLatestState.classes[idx], ...updates };
+      updatedItem = inMemoryLatestState.classes[idx];
+    }
+  }
+
+  if (!updatedItem) {
+    const disk = loadPersistedState();
+    if (disk && Array.isArray(disk.classes)) {
+      const idx = disk.classes.findIndex((c: any) => c.id === id || c.name === id);
+      if (idx >= 0) {
+        disk.classes[idx] = { ...disk.classes[idx], ...updates };
+        updatedItem = disk.classes[idx];
+        inMemoryLatestState = disk;
+      }
+    }
+  }
+
+  if (inMemoryLatestState) {
+    savePersistedState(inMemoryLatestState);
+    broadcastStateUpdate(inMemoryLatestState);
+  }
+
+  return res.json({ success: true, class: updatedItem });
+});
+
+app.delete('/api/classes/:id', async (req, res) => {
+  const { id } = req.params;
+  const { client } = getSupabaseInfo();
+
+  if (client) {
+    try {
+      const classUuid = toValidUuid(id);
+      await client.from('classes').delete().or(`id.eq.${classUuid},id.eq.${id},name.eq.${id}`);
+    } catch (err) {
+      console.warn('[Supabase delete class error]:', err);
+    }
+  }
+
+  if (inMemoryLatestState && Array.isArray(inMemoryLatestState.classes)) {
+    inMemoryLatestState.classes = inMemoryLatestState.classes.filter((c: any) => c.id !== id && c.name !== id);
+  }
+
+  const disk = loadPersistedState();
+  if (disk && Array.isArray(disk.classes)) {
+    disk.classes = disk.classes.filter((c: any) => c.id !== id && c.name !== id);
+    inMemoryLatestState = disk;
+    savePersistedState(disk);
+  }
+
+  if (inMemoryLatestState) {
+    broadcastStateUpdate(inMemoryLatestState);
+  }
+
+  return res.json({ success: true });
+});
+
 // ================= HOMEWORK / ASSIGNMENT API ENDPOINTS =================
 app.get('/api/homeworks', async (req, res) => {
   const { classGrade, teacherId, studentId } = req.query as Record<string, string>;
