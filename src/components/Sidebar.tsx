@@ -23,7 +23,8 @@ import {
   Trophy,
   Cpu,
   Database,
-  Terminal
+  Terminal,
+  Bell
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 
@@ -179,6 +180,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (currentUser.role === 'parent') {
       const parentChildren = dataService.getStudentsForParent(currentUser);
       const childCount = parentChildren.length;
+      const parentNotifs = dataService.getNotificationsForParent(currentUser);
+      const unreadCount = parentNotifs.filter(n => !n.read).length;
+
       return [
         {
           id: 'overview',
@@ -186,6 +190,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
           sublabel: childCount > 1 ? `${childCount} Öğrenci Kayıtlı` : (parentChildren[0]?.displayName || 'Öğrenci'),
           icon: GraduationCap,
           badge: 'Veli'
+        },
+        {
+          id: 'notifications',
+          label: 'Bildirim Merkezi',
+          sublabel: 'Duyuru & Devamsızlık',
+          icon: Bell,
+          badge: unreadCount > 0 ? `${unreadCount}` : undefined
         },
         {
           id: 'grades',

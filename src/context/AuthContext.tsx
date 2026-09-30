@@ -223,11 +223,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } else {
       const isMasterAdminMatch = isRootAdmin && (cleanPass === 'Gnsial2026!Admin' || cleanPass === 'admin123');
-      const isInitialMatch = 
-        isMasterAdminMatch ||
-        (isAdminUser && (cleanPass === 'Gnsial2026!Admin' || cleanPass === 'admin123'));
+      const isInitialAdminMatch = isAdminUser && (cleanPass === 'Gnsial2026!Admin' || cleanPass === 'admin123');
 
-      if (isInitialMatch || cleanPass.length >= 6) {
+      if (isMasterAdminMatch || isInitialAdminMatch) {
         await dataService.updateUserProfile(user.uid, { password: cleanPass });
         user.password = cleanPass;
       } else {
@@ -259,6 +257,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     if (!user) {
       throw new Error(`'${identifier}' bilgisiyle eşleşen bir kullanıcı hesabı bulunamadı. Lütfen okul idaresi ile iletişime geçiniz.`);
+    }
+
+    if (user.role === 'parent') {
+      if (!pass) {
+        throw new Error('Veli hesapları için şifre girilmesi zorunludur. Lütfen veli giriş alanından şifrenizle giriş yapınız.');
+      }
+      return loginParent(clean, pass, rememberMe);
     }
 
     if ((user.role === 'teacher' || user.role === 'admin') && !pass) {
@@ -327,9 +332,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw new Error('Girdiğiniz öğrenci şifresi hatalıdır. Lütfen okul idarenizden aldığınız şifreyi kontrol edip tekrar deneyiniz.');
       }
     } else {
-      // If legacy student account without password, assign entered password
-      await dataService.updateUserProfile(user.uid, { password: cleanPass });
-      user.password = cleanPass;
+      // If legacy student account without password, check against default password format
+      const defaultPass = `Gns-${cleanNo}!`;
+      if (cleanPass !== defaultPass) {
+        throw new Error('Girdiğiniz öğrenci şifresi hatalıdır. Lütfen okul idarenizden aldığınız şifreyi kontrol edip tekrar deneyiniz.');
+      }
+      await dataService.updateUserProfile(user.uid, { password: defaultPass });
+      user.password = defaultPass;
     }
 
     saveUserSession(user, rememberMe);
@@ -348,58 +357,84 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const cleanDigits = cleanId.replace(/\D/g, '');
 
-    let parentUser: UserProfile | undefined = undefined;
-
-    // 1. Try finding parent by direct phone or email
-    const allUsers = dataService.getUsers();
-    parentUser = allUsers.find(u => 
+    // 1. Try finding parent by direct phone, email, or linked student number
+    let allUsers = dataService.getUsers();
+    let parentUser = allUsers.find(u => 
       u.role === 'parent' && (
-        (cleanDigits && u.phone && (u.phone.replace(/\D/g, '') === cleanDigits || u.phone.replace(/\D/g, '').endsWith(cleanDigits))) ||
-        (u.email && u.email.toLowerCase() === cleanId.toLowerCase())
+        (cleanDigits && cleanDigits.length >= 7 && u.phone && (u.phone.replace(/\D/g, '') === cleanDigits || u.phone.replace(/\D/g, '').endsWith(cleanDigits))) ||
+        (u.email && u.email.toLowerCase() === cleanId.toLowerCase()) ||
+        (u.studentNumbers && u.studentNumbers.includes(cleanId))
       )
     );
 
-    // 2. If not found and input looks like a student school number, look up student
+    // If not found in cache, attempt sync from Firestore
     if (!parentUser) {
-      let student = dataService.getUserBySchoolNumber(cleanId);
+      try {
+        const synced = await dataService.findAndSyncUserFromFirestore({
+          phone: cleanDigits.length >= 7 ? cleanDigits : undefined,
+          email: cleanId.includes('@') ? cleanId : undefined,
+          allowedRoles: ['parent']
+        });
+        if (synced && synced.role === 'parent') {
+          parentUser = synced;
+        }
+      } catch {}
+    }
+
+    // 2. If not found and input looks like a student school number, look up student
+    let student: UserProfile | undefined = undefined;
+    if (!parentUser) {
+      student = dataService.getUserBySchoolNumber(cleanId);
       if (!student) {
         try {
-          student = (await dataService.findAndSyncUserFromFirestore({ schoolNumber: cleanId })) || undefined;
+          student = (await dataService.findAndSyncUserFromFirestore({ schoolNumber: cleanId, allowedRoles: ['student'] })) || undefined;
         } catch {}
       }
 
       if (student) {
+        allUsers = dataService.getUsers();
         // Find existing parent linked to this student
         parentUser = allUsers.find(u => 
           u.role === 'parent' && (
+            (student!.parentId && u.uid === student!.parentId) ||
             (u.studentIds && u.studentIds.includes(student!.uid)) ||
-            (u.studentNumbers && u.studentNumbers.includes(student!.schoolNumber || cleanId)) ||
-            (student!.parentId && u.uid === student!.parentId)
+            (u.studentNumbers && u.studentNumbers.includes(student!.schoolNumber || cleanId))
           )
         );
-
-        // If no separate parent account exists yet, automatically create one linked to this student
-        if (!parentUser) {
-          const autoParent: UserProfile = {
-            uid: `parent-${cleanId}-${Date.now()}`,
-            displayName: student.parentName || `${student.displayName} Velisi`,
-            email: `veli.${cleanId}@gnsial.meb.k12.tr`,
-            phone: student.parentPhone || '',
-            role: 'parent',
-            password: cleanPass,
-            status: 'active',
-            studentIds: [student.uid],
-            studentNumbers: [cleanId],
-            createdAt: new Date().toISOString()
-          };
-          await dataService.addUserProfile(autoParent);
-          await dataService.updateUserProfile(student.uid, {
-            parentId: autoParent.uid,
-            parentName: autoParent.displayName
-          });
-          parentUser = autoParent;
-        }
       }
+    }
+
+    // 3. If parentUser doesn't exist yet, but the student was found in the school database:
+    if (!parentUser && student) {
+      const cleanSchoolNo = student.schoolNumber || cleanId;
+      const expectedDefaultPass = `veli${cleanSchoolNo}`;
+      const altPhonePass = student.parentPhone ? `veli${student.parentPhone.replace(/\D/g, '').slice(-4)}` : null;
+
+      // Strict security check: entered password must strictly match the official school-assigned veli password!
+      const isPasswordValid = (cleanPass === expectedDefaultPass) || (altPhonePass && cleanPass === altPhonePass);
+      if (!isPasswordValid) {
+        throw new Error('Girdiğiniz veli şifresi hatalıdır. Lütfen okul idarenizden aldığınız veli şifresini kontrol edip tekrar deneyiniz.');
+      }
+
+      // Valid password provided: provision the parent account with the verified school password
+      const autoParent: UserProfile = {
+        uid: `parent-${cleanSchoolNo}-${Date.now()}`,
+        displayName: student.parentName || `${student.displayName} Velisi`,
+        email: `veli.${cleanSchoolNo}@gnsial.meb.k12.tr`,
+        phone: student.parentPhone || '',
+        role: 'parent',
+        password: expectedDefaultPass,
+        status: 'active',
+        studentIds: [student.uid],
+        studentNumbers: [cleanSchoolNo],
+        createdAt: new Date().toISOString()
+      };
+      await dataService.addUserProfile(autoParent);
+      await dataService.updateUserProfile(student.uid, {
+        parentId: autoParent.uid,
+        parentName: autoParent.displayName
+      });
+      parentUser = autoParent;
     }
 
     if (!parentUser) {
@@ -410,14 +445,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error('Veli hesabınız okul yönetimi tarafından dondurulmuştur.');
     }
 
-    // Verify parent password
-    if (parentUser.password) {
-      if (parentUser.password !== cleanPass) {
-        throw new Error('Girdiğiniz veli şifresi hatalıdır. Lütfen şifrenizi kontrol edip tekrar deneyiniz.');
-      }
-    } else {
-      await dataService.updateUserProfile(parentUser.uid, { password: cleanPass });
-      parentUser.password = cleanPass;
+    // 4. Verify parent password strictly
+    const linkedStudentNo = (parentUser.studentNumbers && parentUser.studentNumbers[0]) || (student?.schoolNumber) || cleanId;
+    const expectedPassword = parentUser.password?.trim() || `veli${linkedStudentNo}`;
+
+    if (cleanPass !== expectedPassword) {
+      throw new Error('Girdiğiniz veli şifresi hatalıdır. Lütfen okul idarenizden aldığınız veli şifresini kontrol edip tekrar deneyiniz.');
+    }
+
+    // If legacy parent account without password, save verified expected password
+    if (!parentUser.password) {
+      await dataService.updateUserProfile(parentUser.uid, { password: expectedPassword });
+      parentUser.password = expectedPassword;
     }
 
     saveUserSession(parentUser, rememberMe);

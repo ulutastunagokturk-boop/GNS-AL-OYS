@@ -3085,8 +3085,11 @@ class DataService {
     }
   }
 
-  public async saveBatchAttendance(records: AttendanceRecord[]): Promise<void> {
+  public async saveBatchAttendance(records: AttendanceRecord[], actorTeacherName?: string): Promise<void> {
     let updated = [...this.cache.attendance];
+    const newNotifs: NotificationItem[] = [];
+    const nowIso = new Date().toISOString();
+
     records.forEach(rec => {
       const idx = updated.findIndex(a => a.studentId === rec.studentId && a.date === rec.date);
       if (idx >= 0) {
@@ -3094,9 +3097,79 @@ class DataService {
       } else {
         updated.unshift(rec);
       }
+
+      // Generate real-time notification for non-present status
+      if (rec.status !== 'present') {
+        const student = this.cache.users.find(u => u.uid === rec.studentId);
+        const stName = student?.displayName || rec.studentName || 'Öğrenci';
+        const stNo = student?.schoolNumber || rec.studentNumber || '';
+        const teacher = this.cache.users.find(u => u.uid === rec.teacherId);
+        const teacherName = actorTeacherName || teacher?.displayName || 'Ders Öğretmeni';
+
+        const statusLabel = rec.status === 'absent'
+          ? 'Devamsız (Gelmedi / Özürsüz)'
+          : rec.status === 'excused'
+          ? 'İzinli / Raporlu (Mazeretli)'
+          : 'Geç Kaldı';
+
+        const statusIcon = rec.status === 'absent' ? '🚨' : rec.status === 'excused' ? '📋' : '⏰';
+        const notifTitle = `${statusIcon} Devamsızlık Bildirimi: ${stName} ${stNo ? `(#${stNo})` : ''}`;
+        const notifMsg = `${rec.date} tarihinde ${stName} için "${statusLabel}" kaydı işlendi.${rec.notes ? ' Açıklama: ' + rec.notes : ''}`;
+
+        // Notification for the student
+        newNotifs.push({
+          id: `notif-att-st-${Date.now()}-${rec.studentId}`,
+          userId: rec.studentId,
+          title: notifTitle,
+          message: notifMsg,
+          type: 'attendance',
+          read: false,
+          createdAt: nowIso,
+          linkTab: 'attendance',
+          actorName: teacherName,
+          actorRole: 'teacher'
+        });
+
+        // Notifications for parent(s) of this student
+        const parents = this.cache.users.filter(u => 
+          u.role === 'parent' && (
+            (u.studentIds && u.studentIds.includes(rec.studentId)) ||
+            (stNo && u.studentNumbers && u.studentNumbers.includes(stNo)) ||
+            (student?.parentId && u.uid === student.parentId)
+          )
+        );
+
+        parents.forEach(p => {
+          newNotifs.push({
+            id: `notif-att-pr-${Date.now()}-${p.uid}-${rec.studentId}`,
+            userId: p.uid,
+            title: notifTitle,
+            message: notifMsg,
+            type: 'attendance',
+            read: false,
+            createdAt: nowIso,
+            linkTab: 'attendance',
+            actorName: teacherName,
+            actorRole: 'teacher'
+          });
+        });
+      }
     });
 
-    this.saveCache({ ...this.cache, attendance: updated });
+    const updatedNotifs = newNotifs.length > 0 
+      ? [...newNotifs, ...this.cache.notifications]
+      : this.cache.notifications;
+
+    this.saveCache({ 
+      ...this.cache, 
+      attendance: updated,
+      notifications: updatedNotifs 
+    });
+
+    // Mirror to Firestore in background
+    records.forEach(rec => {
+      setDoc(doc(db, 'attendance', rec.id), sanitizeForFirestore(rec)).catch(() => {});
+    });
   }
 
   // ================= ANNOUNCEMENTS =================
@@ -3680,6 +3753,107 @@ class DataService {
     const updated = this.cache.notifications.map(n => 
       (n.userId === 'all' || n.userId === userId) ? { ...n, read: true } : n
     );
+    this.saveCache({ ...this.cache, notifications: updated });
+  }
+
+  public getNotificationsForParent(parentUser: UserProfile): NotificationItem[] {
+    const parentChildren = this.getStudentsForParent(parentUser);
+    const childUids = new Set(parentChildren.map(c => c.uid));
+    const childClasses = new Set(parentChildren.map(c => normalizeClassName(c.classGrade)).filter(Boolean));
+    const childSchoolNos = new Set(parentChildren.map(c => c.schoolNumber).filter(Boolean));
+
+    const matched = this.cache.notifications.filter(n => {
+      if (n.userId === parentUser.uid) return true;
+      if (n.userId === 'all' || n.userId === 'parents') return true;
+      if (childUids.has(n.userId)) return true;
+      if (childClasses.has(normalizeClassName(n.userId))) return true;
+
+      if (n.type === 'attendance') {
+        if (Array.from(childUids).some(uid => n.id.includes(uid) || n.message.includes(uid))) return true;
+        if (Array.from(childSchoolNos).some(sNo => n.message.includes(`#${sNo}`) || n.title.includes(`#${sNo}`))) return true;
+        if (parentChildren.some(c => n.title.includes(c.displayName) || n.message.includes(c.displayName))) return true;
+      }
+
+      if (n.type === 'announcement') {
+        return true;
+      }
+
+      return false;
+    });
+
+    // Also synthesize attendance notifications from attendance records if not already in notifications
+    const attendanceRecords = this.cache.attendance.filter(a => 
+      childUids.has(a.studentId) && (a.status === 'absent' || a.status === 'excused' || a.status === 'late')
+    );
+
+    const existingAttKeys = new Set(
+      matched.filter(n => n.type === 'attendance').map(n => `${n.linkTab || ''}-${n.message}`)
+    );
+
+    for (const att of attendanceRecords) {
+      const child = parentChildren.find(c => c.uid === att.studentId);
+      const childName = child ? child.displayName : att.studentName;
+      const schoolNo = child ? child.schoolNumber : att.studentNumber;
+      const statusLabel = att.status === 'absent' ? 'Devamsız (Gelmedi / Özürsüz)' : att.status === 'excused' ? 'İzinli / Raporlu (Mazeretli)' : 'Geç Kaldı';
+      const msg = `${att.date} tarihinde ${childName} (#${schoolNo || ''}) için "${statusLabel}" kaydı işlendi.${att.notes ? ' Açıklama: ' + att.notes : ''}`;
+      
+      const key = `attendance-${msg}`;
+      if (!existingAttKeys.has(key)) {
+        const teacher = this.cache.users.find(u => u.uid === att.teacherId);
+        matched.push({
+          id: `att-synth-${att.id}`,
+          userId: parentUser.uid,
+          title: `${att.status === 'absent' ? '🚨 Devamsızlık Bildirimi' : att.status === 'excused' ? '📋 İzin / Rapor Kaydı' : '⏰ Geç Kalma Bildirimi'}: ${childName} ${schoolNo ? `(#${schoolNo})` : ''}`,
+          message: msg,
+          type: 'attendance',
+          read: false,
+          createdAt: att.updatedAt || `${att.date}T09:00:00.000Z`,
+          linkTab: 'attendance',
+          actorName: teacher ? teacher.displayName : 'Ders Öğretmeni',
+          actorRole: 'teacher'
+        });
+        existingAttKeys.add(key);
+      }
+    }
+
+    // Also ensure recent announcements for children classes are visible
+    const announcements = this.getAnnouncementsForParent(Array.from(childClasses));
+    const existingAnnTitles = new Set(matched.filter(n => n.type === 'announcement').map(n => n.title));
+    for (const ann of announcements) {
+      const expectedTitle = `Yeni Duyuru: ${ann.title}`;
+      const synthTitle = `Duyuru: ${ann.title}`;
+      if (!existingAnnTitles.has(expectedTitle) && !existingAnnTitles.has(synthTitle)) {
+        matched.push({
+          id: `ann-synth-${ann.id}`,
+          userId: parentUser.uid,
+          title: synthTitle,
+          message: ann.content.slice(0, 140) + (ann.content.length > 140 ? '...' : ''),
+          type: 'announcement',
+          read: false,
+          createdAt: ann.createdAt,
+          linkTab: 'announcements',
+          actorName: ann.authorName,
+          actorRole: ann.authorRole
+        });
+        existingAnnTitles.add(synthTitle);
+      }
+    }
+
+    return matched.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public markAllParentNotificationsAsRead(parentUser: UserProfile): void {
+    const parentChildren = this.getStudentsForParent(parentUser);
+    const childUids = new Set(parentChildren.map(c => c.uid));
+
+    const updated = this.cache.notifications.map(n => {
+      const isParentNotif = n.userId === 'all' || 
+        n.userId === 'parents' || 
+        n.userId === parentUser.uid || 
+        childUids.has(n.userId);
+      return isParentNotif ? { ...n, read: true } : n;
+    });
+
     this.saveCache({ ...this.cache, notifications: updated });
   }
 
