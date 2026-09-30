@@ -158,6 +158,7 @@ export interface NotificationItem {
   message: string;
   type: 'homework' | 'grade' | 'attendance' | 'announcement' | 'badge' | 'chat' | 'system';
   read: boolean;
+  readBy?: string[];
   createdAt: string;
   linkTab?: string;
   actorName?: string;

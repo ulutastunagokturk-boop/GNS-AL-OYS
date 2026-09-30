@@ -388,21 +388,21 @@ class DataService {
 
   private async initData() {
     try {
-      // 1. Setup real-time Firestore listeners first
+      // 1. PRIMARY SOURCE OF TRUTH: Supabase PostgreSQL veritabanından tüm güncel verileri çek
+      await this.syncFromSupabaseDatabase(false);
+
+      // 2. Setup real-time multi-device SSE listener
+      this.setupRealtimeSync();
+
+      // 3. Setup real-time Firestore listeners first
       this.setupFirestoreListeners();
 
-      // 2. Fetch live data directly from Supabase & Firestore databases
+      // 4. Secondary Firestore synchronization (non-destructive)
       await this.syncUsersFromFirestore();
       await this.seedInitialAdminIfMissing();
       await this.syncClassesFromCloud();
       await this.syncHomeworksFromCloud();
       await this.syncAnnouncementsFromCloud();
-
-      // 3. Setup real-time multi-device SSE listener
-      this.setupRealtimeSync();
-
-      // 4. Background sync with Supabase if configured
-      await this.syncFromSupabaseDatabase(true);
 
       this.isInitialized = true;
       this.setupLiveSyncPolling();
@@ -428,6 +428,10 @@ class DataService {
       if (!silent) console.warn('[DataService] syncFromSupabaseDatabase note:', e);
     }
     return false;
+  }
+
+  public async ensureSupabaseSynced(): Promise<boolean> {
+    return this.syncFromSupabaseDatabase(false);
   }
 
   /**
@@ -992,15 +996,22 @@ class DataService {
           }
         }
 
-        // Database is the sole source of truth for all users
-        this.cache.users = remoteUsers;
-        this.saveCache(this.cache, false);
-        this.notifySubscribers();
-        return this.cache.users;
-      } else {
-        this.cache.users = [];
-        this.saveCache(this.cache, false);
-        this.notifySubscribers();
+        if (remoteUsers.length > 0) {
+          // Merge with existing Supabase users without losing passwords
+          const userMap = new Map<string, UserProfile>();
+          this.cache.users.forEach(u => userMap.set(u.uid, u));
+          remoteUsers.forEach(u => {
+            const existing = userMap.get(u.uid);
+            userMap.set(u.uid, {
+              ...existing,
+              ...u,
+              password: u.password || existing?.password
+            });
+          });
+          this.cache.users = Array.from(userMap.values());
+          this.saveCache(this.cache, false);
+          this.notifySubscribers();
+        }
       }
     } catch (err) {
       console.warn('Could not sync users from Firestore on startup:', err);
@@ -1016,10 +1027,38 @@ class DataService {
     allowedRoles?: UserRole[];
   }): Promise<UserProfile | null> {
     try {
-      const usersRef = collection(db, 'users');
-      let found: UserProfile | null = null;
+      // 1. Sync from primary Supabase database first
+      await this.syncFromSupabaseDatabase(true);
 
-      // Query Firestore directly
+      const targetSchool = criteria.schoolNumber?.trim();
+      const targetEmail = criteria.email?.trim().toLowerCase();
+      const targetPhone = criteria.phone?.replace(/\D/g, '');
+
+      // Check in-memory Supabase users
+      let found: UserProfile | null = this.cache.users.find(u => {
+        if (criteria.allowedRoles && criteria.allowedRoles.length > 0 && !criteria.allowedRoles.includes(u.role)) {
+          return false;
+        }
+        if (targetSchool && u.role === 'student' && u.schoolNumber === targetSchool) return true;
+        if (targetEmail && u.email?.toLowerCase() === targetEmail) return true;
+        if (targetPhone && u.phone) {
+          const uClean = u.phone.replace(/\D/g, '');
+          if (uClean === targetPhone || uClean.endsWith(targetPhone) || targetPhone.endsWith(uClean)) return true;
+        }
+        if (criteria.identifier) {
+          const raw = criteria.identifier.trim().toLowerCase();
+          const dig = raw.replace(/\D/g, '');
+          if (u.email?.toLowerCase() === raw) return true;
+          if (dig && u.role === 'student' && u.schoolNumber === dig) return true;
+          if (u.phone && dig.length >= 7 && (u.phone.replace(/\D/g, '').endsWith(dig) || dig.endsWith(u.phone.replace(/\D/g, '')))) return true;
+        }
+        return false;
+      }) || null;
+
+      if (found) return found;
+
+      // 2. Query Firestore if not found in Supabase
+      const usersRef = collection(db, 'users');
       const allSnap = await getDocs(usersRef);
       if (!allSnap.empty) {
         const remoteUsers: UserProfile[] = [];
@@ -3744,15 +3783,38 @@ class DataService {
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
-  public markNotificationAsRead(id: string): void {
-    const updated = this.cache.notifications.map(n => n.id === id ? { ...n, read: true } : n);
-    this.saveCache({ ...this.cache, notifications: updated });
+  public markNotificationAsRead(id: string, readerUserId?: string): void {
+    const existing = this.cache.notifications.find(n => n.id === id);
+    if (existing) {
+      const readBy = Array.from(new Set([...(existing.readBy || []), ...(readerUserId ? [readerUserId] : [])]));
+      const updated = this.cache.notifications.map(n => 
+        n.id === id ? { ...n, read: true, readBy } : n
+      );
+      this.saveCache({ ...this.cache, notifications: updated });
+    } else {
+      // If it is a synthetic notification, store it in cache so read state persists
+      const newNotif: NotificationItem = {
+        id,
+        userId: readerUserId || 'all',
+        title: 'Bildirim',
+        message: '',
+        type: id.startsWith('att-') ? 'attendance' : 'announcement',
+        read: true,
+        readBy: readerUserId ? [readerUserId] : [],
+        createdAt: new Date().toISOString()
+      };
+      this.saveCache({ ...this.cache, notifications: [newNotif, ...this.cache.notifications] });
+    }
   }
 
   public markAllNotificationsAsRead(userId: string): void {
-    const updated = this.cache.notifications.map(n => 
-      (n.userId === 'all' || n.userId === userId) ? { ...n, read: true } : n
-    );
+    const updated = this.cache.notifications.map(n => {
+      if (n.userId === 'all' || n.userId === userId) {
+        const readBy = Array.from(new Set([...(n.readBy || []), userId]));
+        return { ...n, read: true, readBy };
+      }
+      return n;
+    });
     this.saveCache({ ...this.cache, notifications: updated });
   }
 
@@ -3762,23 +3824,48 @@ class DataService {
     const childClasses = new Set(parentChildren.map(c => normalizeClassName(c.classGrade)).filter(Boolean));
     const childSchoolNos = new Set(parentChildren.map(c => c.schoolNumber).filter(Boolean));
 
-    const matched = this.cache.notifications.filter(n => {
-      if (n.userId === parentUser.uid) return true;
-      if (n.userId === 'all' || n.userId === 'parents') return true;
-      if (childUids.has(n.userId)) return true;
-      if (childClasses.has(normalizeClassName(n.userId))) return true;
+    const matched: NotificationItem[] = [];
 
-      if (n.type === 'attendance') {
-        if (Array.from(childUids).some(uid => n.id.includes(uid) || n.message.includes(uid))) return true;
-        if (Array.from(childSchoolNos).some(sNo => n.message.includes(`#${sNo}`) || n.title.includes(`#${sNo}`))) return true;
-        if (parentChildren.some(c => n.title.includes(c.displayName) || n.message.includes(c.displayName))) return true;
+    // Filter existing stored notifications
+    this.cache.notifications.forEach(n => {
+      let isRelevant = false;
+
+      if (n.userId === parentUser.uid) isRelevant = true;
+      else if (n.userId === 'all' || n.userId === 'parents') {
+        if (n.type === 'attendance') {
+          // Check if it belongs to one of parent's children
+          const matchesChild = parentChildren.some(c => 
+            n.title.includes(c.displayName) || 
+            n.message.includes(c.displayName) ||
+            (c.schoolNumber && (n.message.includes(`#${c.schoolNumber}`) || n.title.includes(`#${c.schoolNumber}`)))
+          );
+          if (matchesChild) isRelevant = true;
+        } else {
+          isRelevant = true;
+        }
+      } else if (childUids.has(n.userId)) {
+        isRelevant = true;
+      } else if (childClasses.has(normalizeClassName(n.userId))) {
+        isRelevant = true;
       }
 
-      if (n.type === 'announcement') {
-        return true;
+      if (n.type === 'attendance' && !isRelevant) {
+        if (Array.from(childUids).some(uid => n.id.includes(uid) || n.message.includes(uid))) isRelevant = true;
+        if (Array.from(childSchoolNos).some(sNo => n.message.includes(`#${sNo}`) || n.title.includes(`#${sNo}`))) isRelevant = true;
+        if (parentChildren.some(c => n.title.includes(c.displayName) || n.message.includes(c.displayName))) isRelevant = true;
       }
 
-      return false;
+      if (n.type === 'announcement' && !isRelevant) {
+        isRelevant = true;
+      }
+
+      if (isRelevant) {
+        const isReadByMe = n.read || (n.readBy && n.readBy.includes(parentUser.uid));
+        matched.push({
+          ...n,
+          read: !!isReadByMe
+        });
+      }
     });
 
     // Also synthesize attendance notifications from attendance records if not already in notifications
@@ -3799,14 +3886,18 @@ class DataService {
       
       const key = `attendance-${msg}`;
       if (!existingAttKeys.has(key)) {
+        const synthId = `att-synth-${att.id}`;
+        const storedSynth = this.cache.notifications.find(n => n.id === synthId);
+        const isRead = storedSynth ? (storedSynth.read || (storedSynth.readBy && storedSynth.readBy.includes(parentUser.uid))) : false;
+
         const teacher = this.cache.users.find(u => u.uid === att.teacherId);
         matched.push({
-          id: `att-synth-${att.id}`,
+          id: synthId,
           userId: parentUser.uid,
           title: `${att.status === 'absent' ? '🚨 Devamsızlık Bildirimi' : att.status === 'excused' ? '📋 İzin / Rapor Kaydı' : '⏰ Geç Kalma Bildirimi'}: ${childName} ${schoolNo ? `(#${schoolNo})` : ''}`,
           message: msg,
           type: 'attendance',
-          read: false,
+          read: !!isRead,
           createdAt: att.updatedAt || `${att.date}T09:00:00.000Z`,
           linkTab: 'attendance',
           actorName: teacher ? teacher.displayName : 'Ders Öğretmeni',
@@ -3823,13 +3914,17 @@ class DataService {
       const expectedTitle = `Yeni Duyuru: ${ann.title}`;
       const synthTitle = `Duyuru: ${ann.title}`;
       if (!existingAnnTitles.has(expectedTitle) && !existingAnnTitles.has(synthTitle)) {
+        const synthId = `ann-synth-${ann.id}`;
+        const storedSynth = this.cache.notifications.find(n => n.id === synthId);
+        const isRead = storedSynth ? (storedSynth.read || (storedSynth.readBy && storedSynth.readBy.includes(parentUser.uid))) : false;
+
         matched.push({
-          id: `ann-synth-${ann.id}`,
+          id: synthId,
           userId: parentUser.uid,
           title: synthTitle,
           message: ann.content.slice(0, 140) + (ann.content.length > 140 ? '...' : ''),
           type: 'announcement',
-          read: false,
+          read: !!isRead,
           createdAt: ann.createdAt,
           linkTab: 'announcements',
           actorName: ann.authorName,
@@ -3845,13 +3940,39 @@ class DataService {
   public markAllParentNotificationsAsRead(parentUser: UserProfile): void {
     const parentChildren = this.getStudentsForParent(parentUser);
     const childUids = new Set(parentChildren.map(c => c.uid));
+    const childSchoolNos = new Set(parentChildren.map(c => c.schoolNumber).filter(Boolean));
 
     const updated = this.cache.notifications.map(n => {
-      const isParentNotif = n.userId === 'all' || 
+      const isParentNotif = 
+        n.userId === 'all' || 
         n.userId === 'parents' || 
         n.userId === parentUser.uid || 
-        childUids.has(n.userId);
-      return isParentNotif ? { ...n, read: true } : n;
+        childUids.has(n.userId) ||
+        (n.type === 'attendance' && (
+          Array.from(childUids).some(uid => n.id.includes(uid) || n.message.includes(uid)) ||
+          Array.from(childSchoolNos).some(sNo => n.message.includes(`#${sNo}`) || n.title.includes(`#${sNo}`)) ||
+          parentChildren.some(c => n.title.includes(c.displayName) || n.message.includes(c.displayName))
+        ));
+
+      if (isParentNotif) {
+        const readBy = Array.from(new Set([...(n.readBy || []), parentUser.uid]));
+        return { ...n, read: true, readBy };
+      }
+      return n;
+    });
+
+    // Also persist all current synthesized notifications as read
+    const synthesizedList = this.getNotificationsForParent(parentUser);
+    const existingIds = new Set(updated.map(n => n.id));
+    synthesizedList.forEach(sn => {
+      if (!existingIds.has(sn.id)) {
+        updated.push({
+          ...sn,
+          read: true,
+          readBy: [parentUser.uid]
+        });
+        existingIds.add(sn.id);
+      }
     });
 
     this.saveCache({ ...this.cache, notifications: updated });

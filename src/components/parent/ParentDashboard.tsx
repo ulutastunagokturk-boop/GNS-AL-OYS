@@ -970,7 +970,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  dataService.markNotificationAsRead(notif.id);
+                                  dataService.markNotificationAsRead(notif.id, currentUser.uid);
                                   setActiveTab('attendance');
                                 }}
                                 className="px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/60 dark:hover:bg-amber-900/60 text-amber-800 dark:text-amber-200 text-xs font-bold transition flex items-center gap-1 cursor-pointer border border-amber-200 dark:border-amber-800"
@@ -982,7 +982,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  dataService.markNotificationAsRead(notif.id);
+                                  dataService.markNotificationAsRead(notif.id, currentUser.uid);
                                   setActiveTab('announcements');
                                 }}
                                 className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 text-xs font-bold transition flex items-center gap-1 cursor-pointer border border-indigo-200 dark:border-indigo-800"
@@ -995,7 +995,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                             {!notif.read && (
                               <button
                                 type="button"
-                                onClick={() => dataService.markNotificationAsRead(notif.id)}
+                                onClick={() => dataService.markNotificationAsRead(notif.id, currentUser.uid)}
                                 className="text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 font-medium underline cursor-pointer"
                               >
                                 Okundu İşaretle
