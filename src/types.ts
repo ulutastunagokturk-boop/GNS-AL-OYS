@@ -64,7 +64,7 @@ export interface Attachment {
   name: string;
   url: string;
   size?: string;
-  type?: 'pdf' | 'doc' | 'image' | 'archive' | 'link';
+  type?: 'pdf' | 'doc' | 'image' | 'video' | 'audio' | 'archive' | 'link' | 'other';
   uploadedAt?: string;
 }
 

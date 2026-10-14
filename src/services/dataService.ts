@@ -221,7 +221,29 @@ class DataService {
     store.lastUpdated = Date.now();
     this.cache = store;
     try {
-      localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(store));
+      // "asla cache ye kaydetme": Never store heavy file binary / data URLs in browser localStorage cache
+      const sanitizedStore: LocalCacheStore = {
+        ...store,
+        homeworks: (store.homeworks || []).map(h => ({
+          ...h,
+          attachments: (h.attachments || []).map(a => ({
+            ...a,
+            url: typeof a.url === 'string' && a.url.startsWith('data:') ? undefined : a.url
+          }))
+        })),
+        submissions: (store.submissions || []).map(s => ({
+          ...s,
+          attachments: (s.attachments || []).map(a => ({
+            id: a.id,
+            name: a.name,
+            size: a.size,
+            type: a.type,
+            uploadedAt: a.uploadedAt,
+            url: typeof a.url === 'string' && a.url.startsWith('data:') ? undefined : a.url
+          }))
+        }))
+      };
+      localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(sanitizedStore));
     } catch (e) {
       console.warn('LocalStorage limit reached or disabled', e);
     }

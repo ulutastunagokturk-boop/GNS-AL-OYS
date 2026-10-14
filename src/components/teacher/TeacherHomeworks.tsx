@@ -28,7 +28,11 @@ import {
   School,
   UserCheck,
   GraduationCap,
-  Edit3
+  Edit3,
+  Video,
+  Image as ImageIcon,
+  Play,
+  Eye
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -849,6 +853,10 @@ const HomeworkTrackingReportModal: React.FC<{
   const [rubricScores, setRubricScores] = useState<Record<string, number>>({});
   const [teacherFeedbackText, setTeacherFeedbackText] = useState('');
 
+  // Inspect student submitted files (Video, Image, Note, Documents)
+  const [inspectingSubmission, setInspectingSubmission] = useState<HomeworkSubmission | null>(null);
+  const [activeMediaPreview, setActiveMediaPreview] = useState<Attachment | null>(null);
+
   const reloadSubmissions = () => {
     setSubmissions([...homeworkService.getSubmissionsForHomework(homework.id)]);
   };
@@ -1028,6 +1036,7 @@ const HomeworkTrackingReportModal: React.FC<{
                 <tr>
                   <th className="py-3 px-4 w-20">Okul No</th>
                   <th className="py-3 px-4">Öğrenci Adı Soyadı</th>
+                  <th className="py-3 px-4">Öğrenci Yanıtı & Dosyalar</th>
                   <th className="py-3 px-4">Mevcut Durum</th>
                   <th className="py-3 px-4 text-center">Tek Tıkla Durum Güncelle</th>
                   <th className="py-3 px-4 text-center">Detaylı Değerlendirme</th>
@@ -1049,6 +1058,36 @@ const HomeworkTrackingReportModal: React.FC<{
                         </p>
                       )}
                     </td>
+
+                    {/* Student Submitted Files / Video / Photo / Note Column */}
+                    <td className="py-3 px-4">
+                      {sub.attachments && sub.attachments.length > 0 ? (
+                        <button
+                          onClick={() => setInspectingSubmission(sub)}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/60 dark:hover:bg-purple-900/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 text-[11px] font-bold transition shadow-xs cursor-pointer"
+                        >
+                          {sub.attachments.some(a => a.type === 'video' || /\.(mp4|webm|mov|avi)$/i.test(a.name)) ? (
+                            <Video className="w-3.5 h-3.5 text-purple-600" />
+                          ) : sub.attachments.some(a => a.type === 'image' || /\.(png|jpg|jpeg|webp)$/i.test(a.name)) ? (
+                            <ImageIcon className="w-3.5 h-3.5 text-sky-600" />
+                          ) : (
+                            <Paperclip className="w-3.5 h-3.5 text-emerald-600" />
+                          )}
+                          <span>{sub.attachments.length} Dosya (İncele)</span>
+                        </button>
+                      ) : sub.submissionNote ? (
+                        <button
+                          onClick={() => setInspectingSubmission(sub)}
+                          className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-300 hover:text-indigo-600 truncate max-w-[140px] cursor-pointer"
+                        >
+                          <MessageSquare className="w-3 h-3 text-slate-400 shrink-0" />
+                          <span className="truncate">{sub.submissionNote}</span>
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-slate-400 italic">Dosya yok</span>
+                      )}
+                    </td>
+
                     <td className="py-3 px-4">
                       {sub.status === 'completed' && (
                         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300">
@@ -1116,7 +1155,7 @@ const HomeworkTrackingReportModal: React.FC<{
                     <td className="py-3 px-4 text-center">
                       <button
                         onClick={() => handleOpenRubricEvaluation(sub)}
-                        className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 transition flex items-center gap-1 mx-auto"
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 transition flex items-center gap-1 mx-auto cursor-pointer"
                       >
                         <Sliders className="w-3 h-3" />
                         Rubrik Notla
@@ -1143,7 +1182,7 @@ const HomeworkTrackingReportModal: React.FC<{
           </p>
           <button
             onClick={onClose}
-            className="px-5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:hover:bg-white text-white dark:text-slate-900 text-xs font-bold transition"
+            className="px-5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:hover:bg-white text-white dark:text-slate-900 text-xs font-bold transition cursor-pointer"
           >
             Raporu Kapat
           </button>
@@ -1151,10 +1190,206 @@ const HomeworkTrackingReportModal: React.FC<{
 
       </div>
 
-      {/* INDIVIDUAL RUBRIC EVALUATION POPUP MODAL */}
+      {/* DEDICATED STUDENT SUBMISSION DETAIL MODAL (VIDEOS, IMAGES, DOCS) */}
+      {inspectingSubmission && (
+        <div 
+          className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/75 backdrop-blur-sm animate-in fade-in"
+          onClick={() => setInspectingSubmission(null)}
+        >
+          <div 
+            className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50">
+              <div className="flex items-center gap-2">
+                <FileCheck className="w-5 h-5 text-purple-600" />
+                <div>
+                  <h4 className="font-bold text-base text-slate-900 dark:text-white">
+                    Öğrenci Yanıtı & Teslim Dosyaları
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    {inspectingSubmission.studentName} (#{inspectingSubmission.studentNumber}) • {homework.title}
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setInspectingSubmission(null)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-xl"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto space-y-5">
+              {/* Submission Status & Date */}
+              <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs">
+                <div>
+                  <span className="text-slate-400">Teslim Tarihi: </span>
+                  <strong className="text-slate-700 dark:text-slate-300">
+                    {inspectingSubmission.submittedAt ? new Date(inspectingSubmission.submittedAt).toLocaleString('tr-TR') : 'Belirtilmedi'}
+                  </strong>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400">Durum: </span>
+                  <span className={`px-2.5 py-0.5 rounded-full font-bold text-[11px] ${
+                    inspectingSubmission.status === 'completed'
+                      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                      : inspectingSubmission.status === 'not_completed'
+                      ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                      : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                  }`}>
+                    {inspectingSubmission.status === 'completed' ? 'Yapıldı' : inspectingSubmission.status === 'not_completed' ? 'Yapılmadı' : 'Raporlu / Bekliyor'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Student Note */}
+              <div>
+                <h5 className="text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center gap-1.5">
+                  <MessageSquare className="w-4 h-4 text-indigo-500" />
+                  Öğrencinin Açıklama Notu
+                </h5>
+                <div className="p-3.5 rounded-2xl bg-indigo-50/40 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/40 text-xs text-slate-800 dark:text-slate-200 leading-relaxed">
+                  {inspectingSubmission.submissionNote || 'Öğrenci yazılı bir not bırakmamış.'}
+                </div>
+              </div>
+
+              {/* Attachments / Video & Photo Players */}
+              <div>
+                <h5 className="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-1.5">
+                  <Paperclip className="w-4 h-4 text-purple-500" />
+                  Veritabanında Kayıtlı Teslim Dosyaları ({inspectingSubmission.attachments?.length || 0})
+                </h5>
+
+                {inspectingSubmission.attachments && inspectingSubmission.attachments.length > 0 ? (
+                  <div className="space-y-4">
+                    {inspectingSubmission.attachments.map((att, idx) => {
+                      const isVid = att.type === 'video' || /\.(mp4|webm|mov|avi|mkv)$/i.test(att.name);
+                      const isImg = att.type === 'image' || /\.(png|jpg|jpeg|webp|gif)$/i.test(att.name);
+
+                      return (
+                        <div 
+                          key={att.id || idx}
+                          className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 space-y-3 shadow-xs"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 truncate">
+                              {isVid ? (
+                                <Video className="w-4 h-4 text-purple-600 shrink-0" />
+                              ) : isImg ? (
+                                <ImageIcon className="w-4 h-4 text-sky-600 shrink-0" />
+                              ) : (
+                                <FileText className="w-4 h-4 text-emerald-600 shrink-0" />
+                              )}
+                              <span className="font-bold text-xs text-slate-800 dark:text-slate-200 truncate">
+                                {att.name}
+                              </span>
+                              <span className="text-[10px] text-slate-400">({att.size || 'Belirtilmedi'})</span>
+                            </div>
+
+                            {att.url && att.url !== '#' && (
+                              <a
+                                href={att.url}
+                                download={att.name}
+                                className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1 transition"
+                              >
+                                <Download className="w-3 h-3" /> İndir
+                              </a>
+                            )}
+                          </div>
+
+                          {/* Inline Video Player */}
+                          {isVid && att.url && att.url !== '#' && (
+                            <div className="rounded-xl overflow-hidden bg-black border border-slate-700">
+                              <video 
+                                src={att.url} 
+                                controls 
+                                playsInline
+                                className="w-full max-h-72 object-contain"
+                              >
+                                Tarayıcınız video oynatmayı desteklemiyor.
+                              </video>
+                            </div>
+                          )}
+
+                          {/* Inline Image Viewer */}
+                          {isImg && att.url && att.url !== '#' && (
+                            <div className="rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-900 flex justify-center p-2 border border-slate-200 dark:border-slate-700">
+                              <img 
+                                src={att.url} 
+                                alt={att.name} 
+                                className="max-h-72 object-contain rounded-lg cursor-pointer hover:opacity-95 transition"
+                                onClick={() => setActiveMediaPreview(att)}
+                              />
+                            </div>
+                          )}
+
+                          {/* Document view link */}
+                          {!isVid && !isImg && att.url && att.url !== '#' && (
+                            <a
+                              href={att.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1.5 text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-bold"
+                            >
+                              <FileText className="w-3.5 h-3.5" />
+                              Dosyayı Yeni Sekmede Görüntüle
+                            </a>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-center text-xs text-slate-400">
+                    Öğrenci herhangi bir video, görsel veya dosya yüklememiş.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer with quick grading actions */}
+            <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    handleUpdateStatus(inspectingSubmission.studentId, 'completed', 100);
+                    setInspectingSubmission(null);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1 transition shadow-xs cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  Ödevi Onayla (100 Puan)
+                </button>
+                <button
+                  onClick={() => {
+                    handleOpenRubricEvaluation(inspectingSubmission);
+                    setInspectingSubmission(null);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1 transition shadow-xs cursor-pointer"
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                  Rubrik ile Notlandır
+                </button>
+              </div>
+
+              <button
+                onClick={() => setInspectingSubmission(null)}
+                className="px-4 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+              >
+                Kapat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* INDIVIDUAL RUBRIC EVALUATION POPUP MODAL (WITH STUDENT FILES EMBEDDED) */}
       {evaluatingStudent && (
         <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs animate-in zoom-in-95">
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4">
+          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4 max-h-[92vh] overflow-y-auto">
             
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <div>
@@ -1163,13 +1398,42 @@ const HomeworkTrackingReportModal: React.FC<{
                 </h4>
                 <p className="text-xs text-slate-500">#{evaluatingStudent.studentNumber} • {homework.title}</p>
               </div>
-              <button onClick={() => setEvaluatingStudent(null)} className="text-slate-400 hover:text-slate-600">
+              <button onClick={() => setEvaluatingStudent(null)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
+            {/* If student submitted video, image or note, show it here for context! */}
+            {(evaluatingStudent.submissionNote || (evaluatingStudent.attachments && evaluatingStudent.attachments.length > 0)) && (
+              <div className="p-3.5 rounded-2xl bg-purple-50/50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800/40 space-y-2 text-xs">
+                {evaluatingStudent.submissionNote && (
+                  <div>
+                    <span className="font-bold text-purple-900 dark:text-purple-300">Öğrenci Notu: </span>
+                    <span className="text-slate-700 dark:text-slate-300">{evaluatingStudent.submissionNote}</span>
+                  </div>
+                )}
+                {evaluatingStudent.attachments && evaluatingStudent.attachments.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 items-center pt-1">
+                    <span className="font-bold text-purple-900 dark:text-purple-300">Teslim Dosyaları:</span>
+                    {evaluatingStudent.attachments.map((att, i) => (
+                      <a
+                        key={i}
+                        href={att.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 border border-purple-200 dark:border-purple-800 text-[11px] font-bold text-purple-700 dark:text-purple-300 hover:underline"
+                      >
+                        {att.type === 'video' ? <Video className="w-3 h-3" /> : att.type === 'image' ? <ImageIcon className="w-3 h-3" /> : <FileText className="w-3 h-3" />}
+                        {att.name}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Rubric Criteria List with point sliders/selectors */}
-            <div className="space-y-3 max-h-60 overflow-y-auto">
+            <div className="space-y-3 max-h-56 overflow-y-auto">
               {(homework.rubric || [
                 { id: 'def-1', title: 'Genel Başarı ve Doğruluk', maxPoints: 50, description: 'Ödevin gereksinimlerini karşılama düzeyi.' },
                 { id: 'def-2', title: 'Zamanlama & Özen', maxPoints: 50, description: 'Zamanında teslim ve düzen.' }
@@ -1206,7 +1470,7 @@ const HomeworkTrackingReportModal: React.FC<{
                 rows={2}
                 value={teacherFeedbackText}
                 onChange={(e) => setTeacherFeedbackText(e.target.value)}
-                placeholder="Örn: Parabol tepe noktası formülü doğru uygulanmış, işlem sırası başarılı."
+                placeholder="Örn: Video çözümünüz incelendi, işlemler tam ve net."
                 className="w-full px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
@@ -1215,19 +1479,81 @@ const HomeworkTrackingReportModal: React.FC<{
               <button
                 type="button"
                 onClick={() => setEvaluatingStudent(null)}
-                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300"
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 cursor-pointer"
               >
                 Vazgeç
               </button>
               <button
                 type="button"
                 onClick={handleSaveRubricEvaluation}
-                className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
+                className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm cursor-pointer"
               >
                 Notu Kaydet & Bildir
               </button>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* FULLSCREEN MEDIA PREVIEW LIGHTBOX */}
+      {activeMediaPreview && (
+        <div 
+          className="fixed inset-0 z-70 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in"
+          onClick={() => setActiveMediaPreview(null)}
+        >
+          <div 
+            className="w-full max-w-3xl bg-slate-900 rounded-3xl overflow-hidden border border-slate-800 shadow-2xl relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/90 text-white">
+              <div className="flex items-center gap-2 truncate">
+                {activeMediaPreview.type === 'video' ? (
+                  <Video className="w-4 h-4 text-purple-400 shrink-0" />
+                ) : (
+                  <ImageIcon className="w-4 h-4 text-sky-400 shrink-0" />
+                )}
+                <span className="font-bold text-sm truncate">{activeMediaPreview.name}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {activeMediaPreview.url && (
+                  <a
+                    href={activeMediaPreview.url}
+                    download={activeMediaPreview.name}
+                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                    title="İndir"
+                  >
+                    <Download className="w-4 h-4" />
+                  </a>
+                )}
+                <button 
+                  onClick={() => setActiveMediaPreview(null)}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 flex items-center justify-center bg-black/95 min-h-[300px] max-h-[75vh] overflow-auto">
+              {activeMediaPreview.type === 'video' || /\.(mp4|webm|mov|avi|mkv)$/i.test(activeMediaPreview.name) ? (
+                <video 
+                  src={activeMediaPreview.url} 
+                  controls 
+                  autoPlay 
+                  playsInline
+                  className="w-full max-h-[65vh] rounded-xl object-contain bg-black"
+                >
+                  Tarayıcınız video oynatmayı desteklemiyor.
+                </video>
+              ) : (
+                <img 
+                  src={activeMediaPreview.url} 
+                  alt={activeMediaPreview.name} 
+                  className="max-w-full max-h-[65vh] object-contain rounded-xl shadow-lg"
+                />
+              )}
+            </div>
           </div>
         </div>
       )}

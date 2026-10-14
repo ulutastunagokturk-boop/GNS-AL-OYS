@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
+import dns from 'dns';
 import { createServer as createViteServer } from 'vite';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
@@ -11,8 +12,9 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-// Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
+// Body parsing middleware (Increased to 100mb for video, image and file uploads)
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 // Helper to clean API keys
 function sanitizeKey(key?: string): string {
@@ -23,6 +25,31 @@ function sanitizeKey(key?: string): string {
 // In-memory cache for tracking last backup metadata
 let inMemoryLastBackup: any = null;
 let supabaseClient: SupabaseClient | null = null;
+let supabaseIsReachable: boolean | null = null;
+let lastReachabilityCheck = 0;
+let isCheckingReachability = false;
+
+async function checkSupabaseHostReachable(urlStr?: string): Promise<boolean> {
+  const url = sanitizeKey(urlStr || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
+  if (!url) {
+    supabaseIsReachable = false;
+    return false;
+  }
+  try {
+    const hostname = new URL(url).hostname;
+    await dns.promises.lookup(hostname);
+    supabaseIsReachable = true;
+    lastReachabilityCheck = Date.now();
+    return true;
+  } catch (err: any) {
+    supabaseIsReachable = false;
+    lastReachabilityCheck = Date.now();
+    return false;
+  }
+}
+
+// Initial reachability check in background
+checkSupabaseHostReachable().catch(() => {});
 
 function isValidJwt(key?: string): boolean {
   if (!key) return false;
@@ -35,7 +62,8 @@ function getSupabaseInfo(): {
   url: string; 
   hasUrl: boolean; 
   hasKey: boolean; 
-  isServiceRole: boolean 
+  isServiceRole: boolean;
+  isReachable: boolean;
 } {
   let url = sanitizeKey(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
   if (url) {
@@ -54,7 +82,28 @@ function getSupabaseInfo(): {
       url: url || '', 
       hasUrl: !!url, 
       hasKey: !!key, 
-      isServiceRole 
+      isServiceRole,
+      isReachable: false
+    };
+  }
+
+  // Periodic reachability refresh in background if cooldown expired
+  if (Date.now() - lastReachabilityCheck > 60000 && !isCheckingReachability) {
+    isCheckingReachability = true;
+    checkSupabaseHostReachable(url).finally(() => {
+      isCheckingReachability = false;
+    });
+  }
+
+  // If host is known to be unresolvable/offline, do not return client to avoid fetch failed exceptions
+  if (supabaseIsReachable === false) {
+    return {
+      client: null,
+      url,
+      hasUrl: true,
+      hasKey: true,
+      isServiceRole,
+      isReachable: false
     };
   }
 
@@ -68,7 +117,7 @@ function getSupabaseInfo(): {
       });
     } catch (e) {
       console.error('[Supabase Init Error]:', e);
-      return { client: null, url, hasUrl: true, hasKey: true, isServiceRole };
+      return { client: null, url, hasUrl: true, hasKey: true, isServiceRole, isReachable: false };
     }
   }
 
@@ -77,7 +126,8 @@ function getSupabaseInfo(): {
     url, 
     hasUrl: true, 
     hasKey: true, 
-    isServiceRole 
+    isServiceRole,
+    isReachable: true
   };
 }
 
@@ -87,6 +137,21 @@ function toValidUuid(str?: string): string {
   if (uuidRegex.test(str)) return str.toLowerCase();
   const hex = crypto.createHash('md5').update(String(str)).digest('hex');
   return `${hex.substring(0, 8)}-${hex.substring(8, 12)}-4${hex.substring(13, 16)}-a${hex.substring(17, 20)}-${hex.substring(20, 32)}`;
+}
+
+async function fetchWithTimeout<T>(promise: Promise<T>, ms: number = 2500): Promise<T> {
+  let timeoutId: any;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error('Supabase remote query timeout')), ms);
+  });
+  try {
+    const res = await Promise.race([promise, timeoutPromise]);
+    clearTimeout(timeoutId);
+    return res;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
 }
 
 async function getLiveSupabaseTableCounts(client: SupabaseClient) {
@@ -463,6 +528,8 @@ async function syncAllToSupabaseRelationalTables(client: SupabaseClient, store: 
 // ================= LIVE DATABASE REALTIME SSE, DISK PERSISTENCE & IN-MEMORY CACHE =================
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'school_database.json');
+const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+const UPLOADS_META_FILE = path.join(DATA_DIR, 'uploads_meta.json');
 
 function ensureDataDir() {
   try {
@@ -470,6 +537,71 @@ function ensureDataDir() {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
   } catch {}
+}
+
+function ensureUploadsDir() {
+  ensureDataDir();
+  try {
+    if (!fs.existsSync(UPLOADS_DIR)) {
+      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    }
+  } catch {}
+}
+
+function loadUploadsMeta(): Record<string, any> {
+  try {
+    ensureUploadsDir();
+    if (fs.existsSync(UPLOADS_META_FILE)) {
+      const raw = fs.readFileSync(UPLOADS_META_FILE, 'utf-8');
+      return JSON.parse(raw) || {};
+    }
+  } catch {}
+  return {};
+}
+
+function saveUploadsMeta(meta: Record<string, any>) {
+  try {
+    ensureUploadsDir();
+    fs.writeFileSync(UPLOADS_META_FILE, JSON.stringify(meta, null, 2), 'utf-8');
+  } catch {}
+}
+
+function getSafeFileExtension(name: string, mimeType?: string): string {
+  const ext = path.extname(name || '').toLowerCase();
+  if (ext && ext.length <= 6) return ext;
+  const m = (mimeType || '').toLowerCase();
+  if (m.includes('video/mp4')) return '.mp4';
+  if (m.includes('video/webm')) return '.webm';
+  if (m.includes('video/quicktime') || m.includes('mov')) return '.mov';
+  if (m.includes('video/')) return '.mp4';
+  if (m.includes('image/png')) return '.png';
+  if (m.includes('image/jpeg') || m.includes('image/jpg')) return '.jpg';
+  if (m.includes('image/webp')) return '.webp';
+  if (m.includes('image/gif')) return '.gif';
+  if (m.includes('image/')) return '.jpg';
+  if (m.includes('pdf')) return '.pdf';
+  return '.bin';
+}
+
+function getAttachmentType(mimeType: string, filename: string): 'video' | 'image' | 'pdf' | 'doc' | 'audio' | 'other' {
+  const m = (mimeType || '').toLowerCase();
+  const f = (filename || '').toLowerCase();
+  if (m.startsWith('video/') || f.endsWith('.mp4') || f.endsWith('.webm') || f.endsWith('.mov') || f.endsWith('.avi') || f.endsWith('.mkv')) {
+    return 'video';
+  }
+  if (m.startsWith('image/') || f.endsWith('.png') || f.endsWith('.jpg') || f.endsWith('.jpeg') || f.endsWith('.webp') || f.endsWith('.gif')) {
+    return 'image';
+  }
+  if (m.includes('pdf') || f.endsWith('.pdf')) {
+    return 'pdf';
+  }
+  if (m.includes('word') || m.includes('document') || m.includes('text') || f.endsWith('.doc') || f.endsWith('.docx') || f.endsWith('.txt')) {
+    return 'doc';
+  }
+  if (m.startsWith('audio/') || f.endsWith('.mp3') || f.endsWith('.wav') || f.endsWith('.ogg') || f.endsWith('.m4a')) {
+    return 'audio';
+  }
+  return 'other';
 }
 
 function loadPersistedState(): any | null {
@@ -730,7 +862,11 @@ app.post('/api/backup/supabase/sync', async (req, res) => {
       .single();
 
     if (error && error.code !== '42P01') {
-      console.warn('[Supabase Sync Warning]:', error.message);
+      if (error.message && (error.message.includes('fetch failed') || error.message.includes('ENOTFOUND'))) {
+        supabaseIsReachable = false;
+      } else {
+        console.warn('[Supabase Sync Warning]:', error.message);
+      }
     }
 
     // Also attempt relational sync silently
@@ -759,12 +895,17 @@ app.post('/api/backup/supabase/sync', async (req, res) => {
       message: `Tüm okul verileri Supabase veritabanına başarıyla kaydedildi!`
     });
   } catch (err: any) {
-    console.error('[Supabase Sync Error]:', err);
-    return res.status(500).json({
-      success: false,
-      configured: true,
+    if (err?.message?.includes('fetch failed') || err?.message?.includes('ENOTFOUND')) {
+      supabaseIsReachable = false;
+    } else {
+      console.warn('[Supabase Sync Note]:', err?.message || err);
+    }
+    return res.json({
+      success: true,
+      configured: false,
       timestamp: nowIso,
-      message: `Yedekleme sırasında sunucu hatası: ${err?.message || 'Bilinmeyen hata'}`
+      stats,
+      message: 'Uzak sunucuya ulaşılamadı, veriler yerel veritabanında saklandı.'
     });
   }
 });
@@ -835,7 +976,7 @@ app.get('/api/users', async (req, res) => {
     }
   }
 
-  const fallbackUsers = inMemoryLatestState?.users || loadPersistedState()?.users || [];
+  const fallbackUsers = loadPersistedState()?.users || inMemoryLatestState?.users || [];
   return res.json({
     success: true,
     users: fallbackUsers
@@ -884,7 +1025,7 @@ app.post('/api/auth/parent/login', async (req, res) => {
   }
 
   if (!state) {
-    state = inMemoryLatestState || loadPersistedState();
+    state = loadPersistedState() || inMemoryLatestState;
   }
 
   const users: any[] = Array.isArray(state?.users) ? state.users : [];
@@ -1156,7 +1297,12 @@ app.post('/api/database/save', async (req, res) => {
   }
 
   if (!client) {
-    return res.json({ success: true, configured: false, message: 'Sunucu yerel veritabanına kaydedildi, Supabase yapılandırılmamış' });
+    return res.json({ 
+      success: true, 
+      configured: false, 
+      savedLocally: true,
+      message: 'Sunucu yerel veritabanına başarıyla kaydedildi' 
+    });
   }
 
   const nowIso = new Date().toISOString();
@@ -1179,45 +1325,77 @@ app.post('/api/database/save', async (req, res) => {
     }).select('id, created_at').single();
 
     if (error) {
-      console.warn('[Supabase Primary Save Warning]:', error.message);
+      if (error.message && (error.message.includes('fetch failed') || error.message.includes('ENOTFOUND') || error.message.includes('timeout'))) {
+        supabaseIsReachable = false;
+      } else {
+        console.warn('[Supabase Primary Save Warning]:', error.message);
+      }
     }
 
-    // Also attempt relational sync silently
-    try {
-      await syncAllToSupabaseRelationalTables(client, store || {});
-    } catch {}
+    if (!error) {
+      // Also attempt relational sync silently
+      try {
+        await syncAllToSupabaseRelationalTables(client, store || {});
+      } catch {}
 
-    inMemoryLastBackup = {
-      id: data?.id,
-      timestamp: data?.created_at || nowIso,
-      backup_type: 'primary_sync',
-      stats
-    };
+      inMemoryLastBackup = {
+        id: data?.id,
+        timestamp: data?.created_at || nowIso,
+        backup_type: 'primary_sync',
+        stats
+      };
+    }
 
     return res.json({
       success: true,
-      configured: true,
+      configured: !error,
+      savedLocally: true,
       id: data?.id,
       timestamp: data?.created_at || nowIso,
-      message: 'Supabase birincil veritabanına başarıyla kaydedildi'
+      message: error ? 'Sunucu yerel veritabanına başarıyla kaydedildi' : 'Supabase birincil veritabanına başarıyla kaydedildi'
     });
   } catch (err: any) {
-    console.error('[Supabase Save Error]:', err);
-    return res.status(500).json({
-      success: false,
-      configured: true,
-      message: err?.message || 'Kayıt sırasında hata oluştu'
+    if (err?.message?.includes('fetch failed') || err?.message?.includes('ENOTFOUND')) {
+      supabaseIsReachable = false;
+    } else {
+      console.warn('[Supabase Save Note]:', err?.message || err);
+    }
+    return res.json({
+      success: true,
+      configured: false,
+      savedLocally: true,
+      message: 'Sunucu yerel veritabanına başarıyla kaydedildi'
     });
   }
 });
 
 app.post('/api/backup/supabase/test', async (req, res) => {
-  const { client } = getSupabaseInfo();
-  if (!client) {
+  const { client, url, hasUrl, hasKey } = getSupabaseInfo();
+  if (!hasUrl || !hasKey) {
     return res.json({
       success: false,
       configured: false,
       message: 'Supabase URL veya API Anahtarı eksik. Lütfen ortam değişkenlerini kontrol edin.'
+    });
+  }
+
+  // Probe host reachability first
+  const isReachable = await checkSupabaseHostReachable(url);
+  if (!isReachable) {
+    let hostname = 'Supabase sunucusu';
+    try { hostname = new URL(url).hostname; } catch {}
+    return res.json({
+      success: false,
+      configured: false,
+      message: `Supabase sunucusuna ulaşılamıyor: "${hostname}" adresi DNS üzerinde bulunamadı (ENOTFOUND). Lütfen geçerli bir Supabase URL adresi tanımlayınız.`
+    });
+  }
+
+  if (!client) {
+    return res.json({
+      success: false,
+      configured: false,
+      message: 'Supabase istemcisi başlatılamadı.'
     });
   }
 
@@ -1874,6 +2052,151 @@ app.post('/api/homeworks/:id/submissions/status', async (req, res) => {
   res.json({ success: true, submission: sub });
 });
 
+// ================= HOMEWORK SUBMISSION FILE UPLOAD & STREAMING (VIDEO / IMAGE / DOCS) =================
+app.post('/api/uploads/homework-submission', async (req, res) => {
+  try {
+    const { homeworkId, studentId, fileName, fileType, fileSize, fileData } = req.body;
+    if (!fileData) {
+      return res.status(400).json({ success: false, message: 'Dosya verisi (fileData) zorunludur.' });
+    }
+
+    ensureUploadsDir();
+
+    let buffer: Buffer;
+    let mimeType = fileType || 'application/octet-stream';
+    if (typeof fileData === 'string' && fileData.includes(';base64,')) {
+      const parts = fileData.split(';base64,');
+      const mimeMatch = parts[0].match(/data:(.*?)$/);
+      if (mimeMatch && mimeMatch[1]) {
+        mimeType = mimeMatch[1];
+      }
+      buffer = Buffer.from(parts[1], 'base64');
+    } else if (Buffer.isBuffer(fileData)) {
+      buffer = fileData;
+    } else {
+      buffer = Buffer.from(String(fileData), 'base64');
+    }
+
+    const safeExt = getSafeFileExtension(fileName || 'file', mimeType);
+    const fileId = `subfile_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
+    const storedFileName = `${fileId}${safeExt}`;
+    const filePath = path.join(UPLOADS_DIR, storedFileName);
+
+    fs.writeFileSync(filePath, buffer);
+
+    const detectedType = getAttachmentType(mimeType, fileName || storedFileName);
+    const byteSize = buffer.length;
+    const formattedSize = byteSize > 1024 * 1024 
+      ? `${(byteSize / (1024 * 1024)).toFixed(1)} MB`
+      : `${Math.round(byteSize / 1024)} KB`;
+
+    const meta = loadUploadsMeta();
+    meta[fileId] = {
+      id: fileId,
+      storedFileName,
+      originalName: fileName || 'Dosya',
+      mimeType,
+      type: detectedType,
+      byteSize,
+      formattedSize,
+      homeworkId: homeworkId || '',
+      studentId: studentId || '',
+      createdAt: new Date().toISOString()
+    };
+    saveUploadsMeta(meta);
+
+    console.log(`[Uploads] Yeni ödev yanıt dosyası veritabanına kaydedildi: ${fileName} (${formattedSize}, ${detectedType}) -> ${fileId}`);
+
+    return res.json({
+      success: true,
+      attachment: {
+        id: fileId,
+        name: fileName || 'Dosya',
+        size: formattedSize,
+        type: detectedType,
+        url: `/api/files/${fileId}`,
+        uploadedAt: new Date().toISOString()
+      }
+    });
+  } catch (err: any) {
+    console.error('[Uploads Error]:', err);
+    return res.status(500).json({
+      success: false,
+      message: `Dosya veritabanına kaydedilirken hata oluştu: ${err?.message || err}`
+    });
+  }
+});
+
+// Stream / serve files from database uploads directory with Range support for video scrubbing
+app.get('/api/files/:fileId', (req, res) => {
+  const { fileId } = req.params;
+  const meta = loadUploadsMeta();
+  const fileMeta = meta[fileId];
+
+  let storedFileName = fileMeta?.storedFileName;
+  let mimeType = fileMeta?.mimeType || 'application/octet-stream';
+  let originalName = fileMeta?.originalName || 'file';
+
+  // If not found directly in meta, search UPLOADS_DIR by prefix
+  if (!storedFileName) {
+    try {
+      ensureUploadsDir();
+      const files = fs.readdirSync(UPLOADS_DIR);
+      const match = files.find(f => f.startsWith(fileId));
+      if (match) {
+        storedFileName = match;
+        const ext = path.extname(match).toLowerCase();
+        if (ext === '.mp4') mimeType = 'video/mp4';
+        else if (ext === '.webm') mimeType = 'video/webm';
+        else if (ext === '.mov') mimeType = 'video/quicktime';
+        else if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
+        else if (ext === '.png') mimeType = 'image/png';
+        else if (ext === '.webp') mimeType = 'image/webp';
+        else if (ext === '.pdf') mimeType = 'application/pdf';
+      }
+    } catch {}
+  }
+
+  if (!storedFileName) {
+    return res.status(404).send('Dosya veritabanında bulunamadı');
+  }
+
+  const filePath = path.join(UPLOADS_DIR, storedFileName);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send('Dosya bulunamadı');
+  }
+
+  const stat = fs.statSync(filePath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+
+  // Stream video with HTTP 206 Partial Content for video seeking/playback
+  if (range && mimeType.startsWith('video/')) {
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunksize = (end - start) + 1;
+    const file = fs.createReadStream(filePath, { start, end });
+    const head = {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunksize,
+      'Content-Type': mimeType,
+    };
+    res.writeHead(206, head);
+    file.pipe(res);
+    return;
+  }
+
+  res.setHeader('Content-Type', mimeType);
+  res.setHeader('Content-Length', fileSize);
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(originalName)}"`);
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+
+  const stream = fs.createReadStream(filePath);
+  stream.pipe(res);
+});
+
 app.post('/api/homeworks/:id/submit', async (req, res) => {
   const { id } = req.params;
   const { studentId, studentNote, attachments, studentName, schoolNumber, classGrade } = req.body;
@@ -1897,22 +2220,57 @@ app.post('/api/homeworks/:id/submit', async (req, res) => {
   let sub = inMemoryLatestState.submissions.find((s: any) => s.homeworkId === id && s.studentId === studentId);
   const nowIso = new Date().toISOString();
 
-  // Sanitize attachments to prevent oversized payloads or invalid structure
-  const safeAttachments = Array.isArray(attachments) ? attachments.map((att: any) => ({
-    id: att.id || `att-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-    name: att.name || 'Dokuman',
-    size: att.size || 'Belirtilmedi',
-    type: att.type || 'file',
-    url: typeof att.url === 'string' && att.url.length > 500000 ? '#' : (att.url || '#'),
-    uploadedAt: att.uploadedAt || nowIso
-  })) : [];
+  // Safely persist any direct base64 attachments to database uploads directory without truncation
+  const safeAttachments = Array.isArray(attachments) ? attachments.map((att: any) => {
+    let finalUrl = att.url || '#';
+    // If raw base64 data URL was provided, save directly to database disk storage
+    if (typeof finalUrl === 'string' && finalUrl.startsWith('data:')) {
+      try {
+        ensureUploadsDir();
+        const parts = finalUrl.split(';base64,');
+        const mimeMatch = parts[0].match(/data:(.*?)$/);
+        const mimeType = mimeMatch ? mimeMatch[1] : (att.type === 'video' ? 'video/mp4' : 'application/octet-stream');
+        const buffer = Buffer.from(parts[1], 'base64');
+        const safeExt = getSafeFileExtension(att.name || 'file', mimeType);
+        const fileId = `subfile_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
+        const storedFileName = `${fileId}${safeExt}`;
+        fs.writeFileSync(path.join(UPLOADS_DIR, storedFileName), buffer);
+        const detectedType = getAttachmentType(mimeType, att.name || storedFileName);
+        const meta = loadUploadsMeta();
+        meta[fileId] = {
+          id: fileId,
+          storedFileName,
+          originalName: att.name || 'Dosya',
+          mimeType,
+          type: detectedType,
+          byteSize: buffer.length,
+          homeworkId: id,
+          studentId,
+          createdAt: nowIso
+        };
+        saveUploadsMeta(meta);
+        finalUrl = `/api/files/${fileId}`;
+      } catch (e) {
+        console.warn('[Direct base64 save note]:', e);
+      }
+    }
+
+    return {
+      id: att.id || `att-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      name: att.name || 'Dokuman',
+      size: att.size || 'Belirtilmedi',
+      type: att.type || 'file',
+      url: finalUrl,
+      uploadedAt: att.uploadedAt || nowIso
+    };
+  }) : [];
 
   if (sub) {
     sub.status = 'completed';
     sub.submittedAt = nowIso;
     sub.studentNote = studentNote || sub.studentNote;
     if (safeAttachments.length > 0) {
-      sub.attachments = [...(sub.attachments || []), ...safeAttachments];
+      sub.attachments = safeAttachments;
     }
   } else {
     sub = {

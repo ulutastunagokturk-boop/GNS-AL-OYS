@@ -19,7 +19,13 @@ import {
   Sliders,
   Sparkles,
   FileText,
-  Zap
+  Zap,
+  Video,
+  Image as ImageIcon,
+  Play,
+  Eye,
+  UploadCloud,
+  Film
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -30,7 +36,9 @@ export const StudentHomeworks: React.FC = () => {
   const [studentNote, setStudentNote] = useState('');
   const [studentAttachments, setStudentAttachments] = useState<Attachment[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [activeMediaPreview, setActiveMediaPreview] = useState<Attachment | null>(null);
 
   const [homeworks, setHomeworks] = useState<Homework[]>(() => 
     currentUser ? homeworkService.getHomeworksForStudent(currentUser.classGrade, currentUser.uid) : []
@@ -66,40 +74,81 @@ export const StudentHomeworks: React.FC = () => {
     setStudentAttachments(existing?.attachments || []);
   };
 
-  const handleStudentFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    Array.from(files).forEach(file => {
-      if (file.size > 8 * 1024 * 1024) {
-        alert(`"${file.name}" dosyası çok büyük (maksimum 8MB yüklenebilir).`);
-        return;
-      }
+  const uploadSingleFileToDatabase = async (file: File): Promise<Attachment | null> => {
+    return new Promise((resolve) => {
       const reader = new FileReader();
-      reader.onload = () => {
-        const newAtt: Attachment = {
+      reader.onload = async () => {
+        try {
+          const fileData = reader.result as string;
+          const res = await fetch('/api/uploads/homework-submission', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              homeworkId: submittingHw?.id,
+              studentId: currentUser?.uid,
+              fileName: file.name,
+              fileType: file.type,
+              fileSize: file.size,
+              fileData
+            })
+          });
+          const data = await res.json();
+          if (res.ok && data.success && data.attachment) {
+            resolve(data.attachment);
+            return;
+          }
+        } catch (err) {
+          console.warn('[Direct File Upload warn]:', err);
+        }
+
+        // Direct fallback attachment if network error
+        const isVid = file.type.startsWith('video/') || /\.(mp4|webm|mov|avi|mkv)$/i.test(file.name);
+        const isImg = file.type.startsWith('image/') || /\.(png|jpg|jpeg|webp|gif)$/i.test(file.name);
+        const isPdf = file.type.includes('pdf') || /\.pdf$/i.test(file.name);
+        const isAudio = file.type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a)$/i.test(file.name);
+        const detectedType: Attachment['type'] = isVid ? 'video' : isImg ? 'image' : isPdf ? 'pdf' : isAudio ? 'audio' : 'doc';
+
+        const fallbackAtt: Attachment = {
           id: `att-st-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
           name: file.name,
           url: reader.result as string,
-          size: `${(file.size / 1024).toFixed(1)} KB`,
-          type: file.type.includes('pdf') ? 'pdf' : file.type.startsWith('image/') ? 'image' : 'doc',
+          size: file.size > 1024 * 1024 ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` : `${Math.round(file.size / 1024)} KB`,
+          type: detectedType,
           uploadedAt: new Date().toISOString()
         };
-        setStudentAttachments(prev => [...prev, newAtt]);
+        resolve(fallbackAtt);
       };
+      reader.onerror = () => resolve(null);
       reader.readAsDataURL(file);
     });
   };
 
-  const handleAddSampleAttachment = () => {
-    const sampleAtt: Attachment = {
-      id: `att-st-${Date.now()}`,
-      name: 'Odev_Cozumu_Defter_Fotografi.pdf',
-      url: '#',
-      size: '2.4 MB',
-      type: 'pdf',
-      uploadedAt: new Date().toISOString()
-    };
-    setStudentAttachments(prev => [...prev, sampleAtt]);
+  const handleStudentFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsUploading(true);
+    setSubmitError(null);
+
+    try {
+      const fileList = Array.from(files);
+      for (const file of fileList) {
+        if (file.size > 80 * 1024 * 1024) {
+          setSubmitError(`"${file.name}" dosyası çok büyük (maksimum 80MB video/dosya yüklenebilir).`);
+          continue;
+        }
+
+        const uploadedAtt = await uploadSingleFileToDatabase(file);
+        if (uploadedAtt) {
+          setStudentAttachments(prev => [...prev, uploadedAtt]);
+        }
+      }
+    } catch (err: any) {
+      setSubmitError('Dosya yüklenirken bir hata oluştu: ' + (err?.message || err));
+    } finally {
+      setIsUploading(false);
+      e.target.value = '';
+    }
   };
 
   const handleRemoveAttachment = (id: string) => {
@@ -433,48 +482,123 @@ export const StudentHomeworks: React.FC = () => {
                 />
               </div>
 
-              {/* Student File Upload */}
+              {/* Student File Upload (Video, Image, Audio, Document) */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Çözüm / Doküman Ekle (Opsiyonel)
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Ödev Çözüm Dosyası (Video, Fotoğraf, Belge)
+                  </label>
+                  <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
+                    Doğrudan Veritabanına Kaydedilir
+                  </span>
+                </div>
+
+                {/* Uploaded attachments list */}
                 {studentAttachments.length > 0 && (
-                  <div className="mb-2 space-y-1.5">
-                    {studentAttachments.map(att => (
-                      <div key={att.id} className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 flex items-center justify-between text-xs text-emerald-800 dark:text-emerald-200">
-                        <span className="flex items-center gap-1.5 font-semibold truncate max-w-[280px]">
-                          <Paperclip className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                          <span className="truncate">{att.name}</span>
-                          <span className="text-[10px] text-emerald-600">({att.size})</span>
-                        </span>
-                        <button type="button" onClick={() => handleRemoveAttachment(att.id)} className="hover:text-rose-500 p-1">
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-                    ))}
+                  <div className="mb-3 space-y-2">
+                    {studentAttachments.map(att => {
+                      const isVid = att.type === 'video' || /\.(mp4|webm|mov|avi|mkv)$/i.test(att.name);
+                      const isImg = att.type === 'image' || /\.(png|jpg|jpeg|webp|gif)$/i.test(att.name);
+
+                      return (
+                        <div 
+                          key={att.id} 
+                          className="p-2.5 rounded-2xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-2 text-xs"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            {isVid ? (
+                              <div className="w-8 h-8 rounded-xl bg-purple-100 dark:bg-purple-950/80 text-purple-600 dark:text-purple-300 flex items-center justify-center shrink-0">
+                                <Video className="w-4 h-4" />
+                              </div>
+                            ) : isImg ? (
+                              <div className="w-8 h-8 rounded-xl bg-sky-100 dark:bg-sky-950/80 text-sky-600 dark:text-sky-300 flex items-center justify-center shrink-0 overflow-hidden">
+                                {att.url && att.url !== '#' ? (
+                                  <img src={att.url} alt={att.name} className="w-full h-full object-cover" />
+                                ) : (
+                                  <ImageIcon className="w-4 h-4" />
+                                )}
+                              </div>
+                            ) : (
+                              <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-300 flex items-center justify-center shrink-0">
+                                <FileText className="w-4 h-4" />
+                              </div>
+                            )}
+
+                            <div className="truncate">
+                              <p className="font-bold text-slate-800 dark:text-slate-200 truncate max-w-[200px]">
+                                {att.name}
+                              </p>
+                              <p className="text-[10px] text-slate-400 flex items-center gap-1.5">
+                                <span>{att.size || 'Belirtilmedi'}</span>
+                                <span>•</span>
+                                <span className="text-emerald-600 font-semibold">
+                                  {isVid ? '🎬 Video' : isImg ? '📷 Görsel' : '📄 Doküman'}
+                                </span>
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {att.url && att.url !== '#' && (
+                              <button
+                                type="button"
+                                onClick={() => setActiveMediaPreview(att)}
+                                className="px-2 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 text-[11px] font-bold flex items-center gap-1 transition cursor-pointer"
+                              >
+                                {isVid ? <Play className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                                {isVid ? 'İzle' : 'Önizle'}
+                              </button>
+                            )}
+
+                            <button 
+                              type="button" 
+                              onClick={() => handleRemoveAttachment(att.id)} 
+                              className="p-1 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-500 transition cursor-pointer"
+                              title="Sil"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <label className="py-2.5 px-3 rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-emerald-500 text-slate-600 dark:text-slate-400 text-xs font-semibold flex items-center justify-center gap-2 transition cursor-pointer">
-                    <Paperclip className="w-4 h-4 text-emerald-500" />
-                    <span>Dosya veya Fotoğraf Seç</span>
+                {/* Upload action triggers */}
+                <div className="space-y-2">
+                  <label className={`w-full py-3 px-4 rounded-2xl border-2 border-dashed transition flex flex-col items-center justify-center gap-1 text-center cursor-pointer ${
+                    isUploading 
+                      ? 'border-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-600' 
+                      : 'border-slate-300 dark:border-slate-700 hover:border-emerald-500 bg-slate-50/50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400'
+                  }`}>
+                    {isUploading ? (
+                      <div className="flex items-center gap-2 py-1">
+                        <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                        <span className="text-xs font-bold text-indigo-700 dark:text-indigo-300">
+                          Dosya Veritabanına Yükleniyor...
+                        </span>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
+                          <UploadCloud className="w-4 h-4 text-emerald-500" />
+                          <span>Video, Görsel veya Belge Seç</span>
+                        </div>
+                        <p className="text-[10px] text-slate-400">
+                          MP4, WebM, MOV, JPG, PNG, PDF (Maks. 80MB) • Veritabanında saklanır
+                        </p>
+                      </>
+                    )}
                     <input
                       type="file"
                       multiple
-                      accept="image/*,.pdf,.doc,.docx,.txt"
+                      accept="video/*,image/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar"
                       onChange={handleStudentFileUpload}
+                      disabled={isUploading}
                       className="hidden"
                     />
                   </label>
-
-                  <button
-                    type="button"
-                    onClick={handleAddSampleAttachment}
-                    className="py-2.5 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition"
-                  >
-                    <span>+ Örnek Ek Ekle</span>
-                  </button>
                 </div>
               </div>
 
@@ -489,20 +613,20 @@ export const StudentHomeworks: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setSubmittingHw(null)}
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isUploading}
                   className="px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition cursor-pointer disabled:opacity-50"
                 >
                   Vazgeç
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isUploading}
                   className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white text-xs font-bold shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
                 >
                   {isSubmitting ? (
                     <>
                       <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>Teslim Ediliyor...</span>
+                      <span>Veritabanına Kaydediliyor...</span>
                     </>
                   ) : (
                     <>
@@ -513,6 +637,81 @@ export const StudentHomeworks: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MEDIA PREVIEW LIGHTBOX MODAL */}
+      {activeMediaPreview && (
+        <div 
+          className="fixed inset-0 z-70 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in"
+          onClick={() => setActiveMediaPreview(null)}
+        >
+          <div 
+            className="w-full max-w-3xl bg-slate-900 rounded-3xl overflow-hidden border border-slate-800 shadow-2xl relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 bg-slate-900/90 text-white">
+              <div className="flex items-center gap-2 truncate">
+                {activeMediaPreview.type === 'video' ? (
+                  <Video className="w-4 h-4 text-purple-400 shrink-0" />
+                ) : (
+                  <ImageIcon className="w-4 h-4 text-sky-400 shrink-0" />
+                )}
+                <span className="font-bold text-sm truncate">{activeMediaPreview.name}</span>
+                <span className="text-xs text-slate-400">({activeMediaPreview.size})</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {activeMediaPreview.url && (
+                  <a
+                    href={activeMediaPreview.url}
+                    download={activeMediaPreview.name}
+                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                    title="İndir"
+                  >
+                    <Download className="w-4 h-4" />
+                  </a>
+                )}
+                <button 
+                  onClick={() => setActiveMediaPreview(null)}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 flex items-center justify-center bg-black/95 min-h-[300px] max-h-[75vh] overflow-auto">
+              {activeMediaPreview.type === 'video' || /\.(mp4|webm|mov|avi|mkv)$/i.test(activeMediaPreview.name) ? (
+                <video 
+                  src={activeMediaPreview.url} 
+                  controls 
+                  autoPlay 
+                  playsInline
+                  className="w-full max-h-[65vh] rounded-xl object-contain bg-black"
+                >
+                  Tarayıcınız video oynatmayı desteklemiyor.
+                </video>
+              ) : activeMediaPreview.type === 'image' || /\.(png|jpg|jpeg|webp|gif)$/i.test(activeMediaPreview.name) ? (
+                <img 
+                  src={activeMediaPreview.url} 
+                  alt={activeMediaPreview.name} 
+                  className="max-w-full max-h-[65vh] object-contain rounded-xl shadow-lg"
+                />
+              ) : (
+                <div className="text-center p-8 text-white space-y-3">
+                  <FileText className="w-16 h-16 mx-auto text-emerald-400" />
+                  <p className="font-bold text-base">{activeMediaPreview.name}</p>
+                  <a
+                    href={activeMediaPreview.url}
+                    download={activeMediaPreview.name}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs"
+                  >
+                    <Download className="w-4 h-4" /> Dosyayı İndir
+                  </a>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
